@@ -2043,7 +2043,7 @@ export const FR: Readonly<Record<string, string>> = {
   "Aprovado no Habblaud": "Validé dans Habblaud",
   "Recusado no Habblaud": "Refusé dans Habblaud",
   "✋ {0} precisa de você em {1}: {2}": "✋ {0} a besoin de vous dans {1} : {2}",
-  "🏗️ Nova sala: {0}": "🏗️ Nouvelle salle : {0}",
+  "🏗️ Nova sala: {0}": "🏗️ Nouvelle salle : {0}",
   "🚚 {0} foi para {1}": "🚚 {0} est allé dans {1}",
   "Sem repositório": "Sans dépôt",
   "Arquivo de nomes do OpenBot ilegível; mantenho os nomes anteriores.": "Fichier de noms d’OpenBot illisible ; je garde les noms précédents.",
