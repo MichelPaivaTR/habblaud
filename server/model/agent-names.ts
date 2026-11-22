@@ -1,6 +1,7 @@
 // Nomes dos agentes do OpenBot (id `agent-<uuid>` da pasta de trabalho → nome), lidos de um JSON que um exportador grava
 // (deploy/openbot/export-agent-names.py) e de um arquivo `.override.json` ao lado, que vence. Sem arquivo, o mapa é vazio.
 import { readFileSync, statSync } from 'node:fs';
+import { parseCharacterName } from '../../shared/appearance';
 
 const OPENBOT_CWD = /^\/data\/OpenBot\/Agents\/(agent-[0-9a-f-]{36})(\/|$)/;
 const RECHECK_MS = 30_000;
@@ -31,9 +32,11 @@ function stampOf(file: string): string {
 function readNames(file: string): Array<[string, string]> {
   try {
     const j = JSON.parse(readFileSync(file, 'utf8')) as { agents?: Record<string, unknown> };
-    return Object.entries(j.agents ?? {})
-      .filter((e): e is [string, string] => typeof e[1] === 'string' && e[1].trim() !== '')
-      .map(([id, name]) => [id, name.trim()]);
+    // O nome vem de fora: o mesmo critério dos personagens (NFC, sem controle, até NAME_MAX). Nome recusado vira o padrão.
+    return Object.entries(j.agents ?? {}).flatMap(([id, name]) => {
+      const clean = parseCharacterName(name);
+      return clean ? [[id, clean] as [string, string]] : [];
+    });
   } catch {
     return [];
   }

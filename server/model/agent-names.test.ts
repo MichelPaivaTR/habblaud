@@ -62,6 +62,19 @@ describe('AgentNames', () => {
     expect(n.nameOf('outro')).toBeUndefined();
   });
 
+  it('nome com quebra de linha, controle, longo ou só espaços não entra (vira o padrão)', () => {
+    writeFileSync(file(), JSON.stringify({ agents: { [ID]: 'Faísca\n\u0007x', [`${ID}2`]: 'a'.repeat(500), [`${ID}3`]: '   ' } }));
+    const n = names();
+    expect(n.nameOf(ID)).toBeUndefined();
+    expect(n.nameOf(`${ID}2`)).toBeUndefined();
+    expect(n.nameOf(`${ID}3`)).toBeUndefined();
+  });
+
+  it('nome com espaços sobrando é limpo e continua valendo', () => {
+    writeFileSync(file(), JSON.stringify({ agents: { [ID]: '  Scrum   Master  ' } }));
+    expect(names().nameOf(ID)).toBe('Scrum Master');
+  });
+
   it('o override vence sobre o arquivo exportado', () => {
     writeFileSync(file(), JSON.stringify({ agents: { [ID]: 'Faísca' } }));
     writeFileSync(overrideFileOf(file()), JSON.stringify({ agents: { [ID]: 'Faísca 2.0' } }));
