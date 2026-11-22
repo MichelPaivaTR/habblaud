@@ -43,6 +43,10 @@ export interface ServerConfig {
   messages: boolean;
   /** Grava a linha do tempo do escritório para o timelapse (<dataDir>/timeline); HABBLAUD_TIMELINE=0 desliga. */
   timeline: boolean;
+  /** Raízes dos repositórios (HABBLAUD_REPO_ROOTS, separadas por vírgula): com elas, a sala é o repositório. Vazia = sala pela pasta. */
+  repoRoots: string[];
+  /** Arquivo JSON id → nome dos agentes do OpenBot (HABBLAUD_AGENT_NAMES_FILE); ausente = nomes sorteados. */
+  agentNamesFile?: string;
   /** Raiz do projeto (onde fica o package.json); serve dist/client a partir daqui. */
   rootDir: string;
   version: string;
@@ -222,6 +226,14 @@ export function worldSocketUrl(base: string): string {
   return `${base.replace(/^http/, 'ws').replace(/\/+$/, '')}/v1/socket`;
 }
 
+/** HABBLAUD_REPO_ROOTS: lista separada por vírgula; espaços, itens vazios e barras finais saem. */
+export function parseRepoRoots(raw: string | undefined): string[] {
+  return (raw ?? '')
+    .split(',')
+    .map((r) => r.trim().replace(/\/+$/, ''))
+    .filter((r) => r !== '');
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env, argv: string[] = process.argv): ServerConfig {
   const home = env.HOME || homedir();
   const inDocker = detectDocker(env);
@@ -244,6 +256,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, argv: string[] 
     terminal: terminalOffReason(env, host, inDocker) === undefined,
     messages: messagesOffReason(env, host, inDocker) === undefined,
     timeline: !env.HABBLAUD_TIMELINE?.trim() || isTruthy(env.HABBLAUD_TIMELINE),
+    repoRoots: parseRepoRoots(env.HABBLAUD_REPO_ROOTS),
+    agentNamesFile: env.HABBLAUD_AGENT_NAMES_FILE?.trim() || undefined,
     rootDir,
     version: pkg.version,
     repo: pkg.repo,

@@ -488,6 +488,8 @@ em `shared/world/city.ts` (fonte da verdade; o servidor do mundo guarda a cópia
 | `HABBLAUD_CLAUDE_DIRS` | — | config dirs separados por vírgula; substitui a detecção (`~/.claude*` com `projects/` ou `sessions/` + `CLAUDE_CONFIG_DIR`) |
 | `HABBLAUD_DATA_DIR` | `~/.habblaud` (Docker: `/data`) | estado do Habblaud (nomes e personagens dos projetos persistidos em `names.json`, linha do tempo em `timeline/`, estatísticas do Meu dia em `stats/`, última verificação de versão em `updates.json`) |
 | `HABBLAUD_TIMELINE` | ligado | `0` desliga a gravação da linha do tempo do timelapse |
+| `HABBLAUD_REPO_ROOTS` | — | pastas dos repositórios separadas por vírgula; com elas, cada sala é um repositório (o último onde o agente trabalhou), e quem não está em nenhum fica em "Sem repositório" (a primeira raiz). Sem elas, a sala é a pasta da sessão |
+| `HABBLAUD_AGENT_NAMES_FILE` | — | JSON `{ "agents": { "<id do agente>": "<nome>" } }` com o nome de cada agente do OpenBot (um `…override.json` ao lado, se existir, tem prioridade) |
 | `HABBLAUD_UPDATE_CHECK` | ligado | `0` desliga a verificação de versão nova (releases do repositório do `package.json` no GitHub, a cada 6 h) |
 | `HABBLAUD_LANG` | idioma do sistema (`LC_ALL`/`LANG`/Intl) | idioma dos textos montados pelo servidor: `pt-BR` ou `fr` (shared/i18n.ts) |
 | `HABBLAUD_DEMO` | desligado | `1` liga o modo demonstração ao iniciar |
