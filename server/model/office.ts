@@ -136,6 +136,8 @@ interface AgentRecord {
   repo?: { room: string; at: number };
   /** Nome vindo do OpenBot: não passa pelo NameStore (nada de names.json). */
   fixedName?: boolean;
+  /** Nome-base do OpenBot (sem o sufixo de duplicata); ver renameOpenbot. */
+  openbotName?: string;
   /** Início do turno atual (para "Concluiu em X"). */
   turnStart?: number;
   /** Atividade "Concluiu" sintetizada pela mudança de status (substituída pela do transcript, se vier). */
@@ -374,7 +376,10 @@ export class Office {
     }
     if (p.status === 'waiting') info.waitingFor = p.waitingFor ?? tr('responder no terminal');
     const rec: AgentRecord = { info, history: [] };
-    if (p.openbot) rec.fixedName = true;
+    if (p.openbot) {
+      rec.fixedName = true;
+      rec.openbotName = p.openbot.name;
+    }
     if (p.status === 'working') rec.turnStart = now;
     this.agents.set(p.id, rec);
     const acc = this.deps.accountName(p.account);
@@ -1100,10 +1105,26 @@ export class Office {
 
   /** Nome do OpenBot do agente; um segundo agente com o mesmo nome (outra sessão dele) vira "nome 2", "nome 3"... */
   private openbotPerson(o: { agentId: string; name: string }): { name: string; look: 'f' | 'm' } {
-    const used = new Set([...this.agents.values()].map((r) => r.info.name));
-    let name = o.name;
-    for (let n = 2; used.has(name); n++) name = `${o.name} ${n}`;
-    return { name, look: hash32(o.agentId) % 2 ? 'm' : 'f' };
+    return { name: this.openbotName(o.name), look: hash32(o.agentId) % 2 ? 'm' : 'f' };
+  }
+
+  private openbotName(base: string, exceptId?: string): string {
+    const used = new Set([...this.agents].filter(([id]) => id !== exceptId).map(([, r]) => r.info.name));
+    let name = base;
+    for (let n = 2; used.has(name); n++) name = `${base} ${n}`;
+    return name;
+  }
+
+  /**
+   * O nome do OpenBot mudou (arquivo de nomes criado ou atualizado, agente renomeado): troca o nome do agente, mantendo o
+   * sufixo de duplicata. Sem mudança no nome-base, não faz nada.
+   */
+  renameOpenbot(id: string, base: string): void {
+    const rec = this.agents.get(id);
+    if (!rec?.fixedName || rec.openbotName === base) return;
+    rec.openbotName = base;
+    rec.info.name = this.openbotName(base, id);
+    this.markDirty();
   }
 
   /** Leva o principal e os subagentes dele para a sala. */

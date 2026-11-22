@@ -847,6 +847,18 @@ describe('ClaudeWatcher — nome do agente do OpenBot', () => {
     expect(c.agents().find((a) => a.kind === 'main')?.name).toBe('Faísca');
   });
 
+  it('primeira subida sem o arquivo: agent-<8>; quando o arquivo aparece, o nome real entra no ciclo seguinte', () => {
+    rmSync(join(names.dir, 'names.json'));
+    c = setup({ agentNames: new AgentNames(join(names.dir, 'names.json'), () => c.now()) });
+    c.openSession(100, 'sess-o', { cwd: `/data/OpenBot/Agents/${ID}` });
+    c.watcher.boot();
+    expect(c.agents().find((a) => a.kind === 'main')?.name).toBe('agent-3d36e8ea');
+    writeFileSync(join(names.dir, 'names.json'), JSON.stringify({ agents: { [ID]: 'Faísca' } }));
+    c.advance(30_000);
+    c.poll();
+    expect(c.agents().find((a) => a.kind === 'main')?.name).toBe('Faísca');
+  });
+
   it('sem o arquivo configurado, o nome é o sorteado, como antes', () => {
     c = setup();
     c.openSession(100, 'sess-o', { cwd: `/data/OpenBot/Agents/${ID}` });

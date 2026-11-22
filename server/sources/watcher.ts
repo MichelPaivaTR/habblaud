@@ -340,6 +340,9 @@ export class ClaudeWatcher implements AgentSource {
       office.switchSession(key, entry.sessionId);
       t = fresh;
     }
+    // O nome do OpenBot é reavaliado a cada ciclo: o arquivo pode chegar ou mudar depois da sessão abrir.
+    const openbot = this.openbotOf(entry.cwd);
+    if (openbot) office.renameOpenbot(key, openbot.name);
     t.entry = entry;
     this.pumpMain(t);
     this.scanSubagents(t, boot);

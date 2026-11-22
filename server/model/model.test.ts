@@ -984,6 +984,27 @@ describe('Office: nome do agente do OpenBot', () => {
     expect(office.get('.claude:s1')?.name).toBe('agent-3d36e8ea');
   });
 
+  it('nome do OpenBot que chega depois (fallback -> real) é trocado sem recriar a sessão', () => {
+    const office = new Office(deps());
+    main(office, 's1', 'agent-3d36e8ea');
+    expect(office.get('.claude:s1')?.name).toBe('agent-3d36e8ea');
+    office.renameOpenbot('.claude:s1', 'Faísca');
+    expect(office.get('.claude:s1')?.name).toBe('Faísca');
+    expect(office.get('.claude:s1')?.id).toBe('.claude:s1');
+  });
+
+  it('renomear o agente mantém o sufixo de duplicata da outra sessão e não mexe sem mudança', () => {
+    const office = new Office(deps());
+    main(office, 's1');
+    main(office, 's2');
+    expect(office.get('.claude:s2')?.name).toBe('Faísca 2');
+    office.renameOpenbot('.claude:s1', 'Faísca');
+    expect(office.get('.claude:s1')?.name).toBe('Faísca');
+    office.renameOpenbot('.claude:s1', 'Nova');
+    expect(office.get('.claude:s1')?.name).toBe('Nova');
+    expect(office.get('.claude:s2')?.name).toBe('Faísca 2');
+  });
+
   it('sem o campo openbot: nome sorteado, como antes', () => {
     const d = deps();
     const office = new Office(d);
