@@ -32,6 +32,11 @@ export interface ApiDeps {
   inDocker: boolean;
   /** Terminal ligado (ServerConfig.terminal: só com bind local). */
   terminal?: boolean;
+  /**
+   * Modo de visualização pela tailnet (ServerConfig.view): libera só a leitura do terminal, do histórico e das
+   * mensagens. Escrita, permissões, PTY, entregas e edição seguem em 403.
+   */
+  view?: boolean;
   /** Streams do terminal; sem eles o recurso fica desligado mesmo com `terminal`. */
   terminals?: TerminalStreams;
   /**
@@ -262,7 +267,7 @@ export function modSummary(
 /** Devolve um handler que trata /api/* e responde false para o resto. */
 export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: ServerResponse, url: URL) => boolean {
   const { office, hub, accounts } = deps;
-  const terminals = deps.terminal ? deps.terminals : undefined;
+  const terminals = deps.terminal || deps.view ? deps.terminals : undefined;
 
   const isRemote = (req: IncomingMessage): boolean => !!deps.remote?.is(req);
   /**
@@ -271,6 +276,8 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
    */
   const trusted = (req: IncomingMessage, feature?: RemoteFeature): boolean =>
     isRemote(req) ? !!feature && !!deps.remote?.allows(feature) : isLoopbackHost(req.headers.host);
+  /** Leitura do terminal e do histórico: a trava local, ou o modo de visualização pela tailnet (só leitura). */
+  const viewTrusted = (req: IncomingMessage): boolean => (isRemote(req) ? trusted(req, 'terminal') : isLoopbackHost(req.headers.host) || !!deps.view);
   const denied = (req: IncomingMessage, localMessage: string): string =>
     isRemote(req) ? tr('não liberado no acesso remoto (veja HABBLAUD_REMOTE_ALLOW)') : localMessage;
 
@@ -338,6 +345,12 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       sendJson(res, 403, { error: tr('rota só do próprio computador (hooks, plugins e o auxiliar do host)') });
       return true;
     }
+    if (deps.view && !isRead) {
+      // Modo de visualização pela tailnet: só leitura. Qualquer escrita é 403 antes de chegar a uma rota.
+      req.resume();
+      sendJson(res, 403, { error: tr('somente leitura pela tailnet (HABBLAUD_VIEW_REMOTE)') });
+      return true;
+    }
     if (path === '/api/world' || path.startsWith('/api/world/')) {
       // A conta do Habblaud World age em seu nome: só o próprio computador, como o terminal. O Host local sozinho não
       // basta (o Tailscale chega pelo loopback e o Host se imita): a porta remota nunca passa, nem com login.
@@ -396,7 +409,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
           local: !remote && isLoopbackHost(req.headers.host),
           permissions: !!deps.permissions && trusted(req, 'permissions'),
           messages: !!deps.messages && trusted(req, 'messages'),
-          terminal: !!terminals && trusted(req, 'terminal'),
+          terminal: !!terminals && viewTrusted(req),
           spawn: !!deps.spawn && trusted(req, 'spawn'),
           world: !!deps.world && !!deps.terminal && !remote && isLoopbackHost(req.headers.host),
         };
@@ -418,7 +431,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       if (method !== 'GET') methodNotAllowed(res, 'GET');
       else if (!terminals) {
         sendJson(res, 403, { error: tr('terminal desligado: ele só funciona com o Habblaud acessível apenas pelo próprio computador') });
-      } else if (!trusted(req, 'terminal')) {
+      } else if (!viewTrusted(req)) {
         sendJson(res, 403, { error: denied(req, tr('o terminal só abre pelo próprio computador (http://localhost ou http://127.0.0.1)')) });
       } else {
         let id: string;
@@ -434,9 +447,9 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
     }
     if (path.startsWith('/api/sessions/')) {
       handleSessionsRoute(req, res, path, {
-        history: deps.terminal ? deps.sessions : undefined,
+        history: deps.terminal || deps.view ? deps.sessions : undefined,
         terminals,
-        trusted: isRemote(req) ? trusted(req, 'terminal') : undefined,
+        trusted: isRemote(req) ? trusted(req, 'terminal') : deps.view ? true : undefined,
       });
       return true;
     }

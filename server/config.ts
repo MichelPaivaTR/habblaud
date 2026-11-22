@@ -41,6 +41,11 @@ export interface ServerConfig {
    * trava do terminal e HABBLAUD_MENSAGENS sem desligar (ver messagesOffReason).
    */
   messages: boolean;
+  /**
+   * Modo de visualização pela tailnet (HABBLAUD_VIEW_REMOTE=1 com HABBLAUD_HOST num IP da tailnet): libera só a leitura
+   * do terminal, do histórico de sessões e das mensagens (o filtro "Só prompts"); tudo que escreve segue em 403.
+   */
+  view: boolean;
   /** Grava a linha do tempo do escritório para o timelapse (<dataDir>/timeline); HABBLAUD_TIMELINE=0 desliga. */
   timeline: boolean;
   /** Raízes dos repositórios (HABBLAUD_REPO_ROOTS, separadas por vírgula): com elas, a sala é o repositório. Vazia = sala pela pasta. */
@@ -226,6 +231,29 @@ export function worldSocketUrl(base: string): string {
   return `${base.replace(/^http/, 'ws').replace(/\/+$/, '')}/v1/socket`;
 }
 
+/** IP da tailnet do Tailscale: 100.64.0.0/10 (IPv4) ou fd7a:115c:a1e0::/48 (IPv6). Nome nunca vale. */
+export function isTailnetBind(value: string | undefined): boolean {
+  let v = value?.trim().toLowerCase() ?? '';
+  if (v.startsWith('[') && v.endsWith(']')) v = v.slice(1, -1);
+  const family = isIP(v);
+  if (family === 4) {
+    const [a, b] = v.split('.').map(Number);
+    return a === 100 && (b & 0xc0) === 64;
+  }
+  if (family === 6) return v.startsWith('fd7a:115c:a1e0:');
+  return false;
+}
+
+/**
+ * Por que o modo de visualização ficou desligado mesmo com HABBLAUD_VIEW_REMOTE ligado (undefined = sem a flag, ou
+ * ligado de verdade). Fail-closed: o bind precisa ser um IP da tailnet.
+ */
+export function viewOffReason(env: NodeJS.ProcessEnv, host: string): string | undefined {
+  const flag = env.HABBLAUD_VIEW_REMOTE?.trim();
+  if (!flag || !isTruthy(flag)) return undefined;
+  return isTailnetBind(host) ? undefined : tr('HABBLAUD_VIEW_REMOTE pede um IP da tailnet em HABBLAUD_HOST (estava {0})', [host]);
+}
+
 /** HABBLAUD_REPO_ROOTS: lista separada por vírgula; espaços, itens vazios e barras finais saem. */
 export function parseRepoRoots(raw: string | undefined): string[] {
   return (raw ?? '')
@@ -255,6 +283,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, argv: string[] 
     allowedHosts: parseAllowedHosts(env.HABBLAUD_ALLOWED_HOSTS),
     terminal: terminalOffReason(env, host, inDocker) === undefined,
     messages: messagesOffReason(env, host, inDocker) === undefined,
+    view: !viewOffReason(env, host) && isTruthy(env.HABBLAUD_VIEW_REMOTE),
     timeline: !env.HABBLAUD_TIMELINE?.trim() || isTruthy(env.HABBLAUD_TIMELINE),
     repoRoots: parseRepoRoots(env.HABBLAUD_REPO_ROOTS),
     agentNamesFile: env.HABBLAUD_AGENT_NAMES_FILE?.trim() || undefined,

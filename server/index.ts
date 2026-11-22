@@ -6,7 +6,7 @@ import http from 'node:http';
 import { join } from 'node:path';
 import { codexDirsRefused, isDefaultDir } from './accounts/detect';
 import { AccountsService } from './accounts/service';
-import { isTruthy, loadConfig, messagesOffReason, terminalOffReason, worldSocketUrl } from './config';
+import { isTruthy, loadConfig, messagesOffReason, terminalOffReason, viewOffReason, worldSocketUrl } from './config';
 import { createApiHandler, sendJson } from './http/app';
 import { createRequestGuard, isLoopbackHost } from './http/guard';
 import { createRemoteGate, isRemoteRequest, loadSecret, RemoteSessions, startRemoteListener, type RemoteListener } from './http/remote';
@@ -127,7 +127,7 @@ const office = new Office({
   accounts: (sessions) => accounts.list(sessions),
   sources: () => late.agents?.sources() ?? [],
   accountName: (id) => accounts.find(id)?.detected.name,
-  terminal: config.terminal,
+  terminal: config.terminal || config.view,
   permissions: () => late.permissions?.snapshot() ?? new Map(),
   messages: config.messages ? () => late.messages?.reachable() ?? new Set() : undefined,
   ptys: () => (late.ptys ? { status: late.ptys.status(), list: late.ptys.list() } : { status: { enabled: false, reason: late.ptyOff ?? tr('desligado') }, list: [] }),
@@ -193,17 +193,18 @@ if (worldUplink && worldSocial) {
 }
 // Terminal: só existe com bind local (ver terminalOffReason em config.ts).
 // Cada agente com o parser da ferramenta dele (o do Claude Code por padrão).
-const terminals = config.terminal
+const terminals = config.terminal || config.view
   ? new TerminalStreams({ office, transcriptPathOf: (id) => agents.transcriptPathOf(id), parserFor: (id) => agents.parserFor(id) })
   : undefined;
-// Histórico do terminal (sessões recentes, abertas ou encerradas, de todas as ferramentas): mesma trava.
-const history = config.terminal
+// Histórico do terminal (sessões recentes, abertas ou encerradas, de todas as ferramentas): mesma trava, ou só a leitura pela tailnet.
+const history = config.terminal || config.view
   ? new HistorySet([new SessionHistory({ accounts: () => accounts.entries(), openAgentOf: (acc, sid) => openMainAgent(office.list(), acc, sid) })])
   : undefined;
 if (history && codex) history.add(new CodexHistory({ accounts: () => accounts.entriesOf('codex'), openAgentOf: (acc, sid) => openMainAgent(office.list(), acc, sid) }));
 // Entregas: o fim de cada pedido, lido dos transcripts do histórico (mesma trava do terminal). Os arquivos entregues
-// são lidos aqui (Node, ou pasta de conta montada no Docker) ou pelo auxiliar do host.
-const deliveries = history
+// são lidos aqui (Node, ou pasta de conta montada no Docker) ou pelo auxiliar do host. Fora do terminal (modo de
+// leitura pela tailnet), não existem: servem arquivos da máquina.
+const deliveries = config.terminal && history
   ? new DeliveryIndex({
       sessions: () => history.list(),
       resolve: (account, sessionId) => {
@@ -358,6 +359,7 @@ const api = createApiHandler({
   version: config.version,
   inDocker: config.inDocker,
   terminal: config.terminal,
+  view: config.view,
   terminals,
   sessions: history,
   timeline: createTimelineHandler({ dir: timelineDir, recording: !!timeline }),
@@ -498,7 +500,10 @@ server.listen(config.port, config.host, () => {
   }
   if (office.isDemo()) log.info(tr('   Modo demonstração ligado (agentes simulados misturados aos reais).'));
   if (config.terminal) log.info(tr('   Terminal: ligado (acesso só local).'));
+  else if (config.view) log.info(tr('   Terminal: somente leitura pela tailnet (HABBLAUD_VIEW_REMOTE).'));
   else log.info(tr('   Terminal: desligado ({0}).', [terminalOffReason(process.env, config.host, config.inDocker)]));
+  const viewWhy = viewOffReason(process.env, config.host);
+  if (viewWhy) log.warn(tr('   Visualização pela tailnet desligada: {0}.', [viewWhy]));
   log.info(ptys ? tr('   Terminal interativo: ligado ({0}).', [claudeBin]) : tr('   Terminal interativo: {0}.', [ptyOff ?? tr('desligado')]));
   log.info(
     !spawn
