@@ -8,6 +8,7 @@ import { describePrompt, describeShellJob, describeTool, maskSecrets, SPECIAL, t
 import type { GitHubEvent } from '../../shared/github';
 import { detectGitHubNotification, detectGitHubResult, githubCallOf, type GitHubCall } from './github';
 import type { ShellStart } from './shells';
+import { repoHintFromTool } from '../model/repo-room';
 import { LineBuffer, warnOversizedLine } from './tail';
 
 // ------------------------------------------------------------------ tarefas
@@ -94,7 +95,9 @@ export type TranscriptSignal =
   /** Fim de turno ou interrupção: nenhum comando em primeiro plano segue rodando. */
   | { type: 'turnEnd' }
   /** Evento do GitHub (PR, merge, push, CI, release) no resultado de uma ferramenta; ver github.ts. */
-  | { type: 'github'; event: GitHubEvent; toolUseId: string };
+  | { type: 'github'; event: GitHubEvent; toolUseId: string }
+  /** Chamada de ferramenta em um repositório (raízes em ParseContext.repoRoots); `at` = instante da linha. */
+  | { type: 'repoHint'; repo: string; at: number };
 
 /** Sinais que interessam ao rastreador de shells (inclusive no começo do arquivo, lido em segundo plano). */
 const SHELL_SIGNALS = new Set<TranscriptSignal['type']>(['shellStart', 'shellResult', 'notification', 'stopped', 'turnEnd']);
@@ -180,6 +183,8 @@ export interface ParseContext {
   now: number;
   /** false = só atualiza o estado (leitura do prefixo em segundo plano). */
   activities?: boolean;
+  /** Raízes dos repositórios (HABBLAUD_REPO_ROOTS): sem elas não há sinal repoHint. */
+  repoRoots?: string[];
 }
 
 export interface LineResult {
@@ -462,6 +467,8 @@ class LineParser {
     this.push(describeTool(name, input), { suffix, tool: name, toolUseId: id, msgId });
     const gh = githubCallOf(name, input);
     if (gh) remember(s.github, id, gh, 64);
+    const repo = repoHintFromTool(name, input, this.ctx.repoRoots ?? []);
+    if (repo) this.out.signals.push({ type: 'repoHint', repo, at: this.at });
 
     switch (name) {
       case 'Agent':

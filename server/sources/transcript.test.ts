@@ -469,3 +469,31 @@ describe('janela final + prefixo em segundo plano', () => {
     expect(applyTaskOp([], { op: 'update', id: '9', status: 'completed' })).toEqual([]);
   });
 });
+
+describe('parseLine — sinal repoHint', () => {
+  const ROOTS = ['/data/OpenBot/Shared/Github'];
+  const REPO = '/data/OpenBot/Shared/Github/habblaud';
+  const one = (line: string, roots: string[] = ROOTS) => parseLine(createTranscriptState(), line, { idPrefix: 'a', now: T0, repoRoots: roots });
+
+  it('Edit em um repositório emite repoHint com o instante da linha', () => {
+    const r = one(L.assistant([L.tool('e1', 'Edit', { file_path: `${REPO}/server/x.ts` })], { at: T0 - 1000 }));
+    expect(r.signals).toContainEqual({ type: 'repoHint', repo: REPO, at: T0 - 1000 });
+  });
+
+  it('sem raízes configuradas, nenhum repoHint', () => {
+    const r = one(L.assistant([L.tool('e1', 'Edit', { file_path: `${REPO}/server/x.ts` })]), []);
+    expect(r.signals.some((s) => s.type === 'repoHint')).toBe(false);
+  });
+
+  it('caminho fora dos repositórios e ferramenta sem caminho não emitem nada', () => {
+    const fora = one(L.assistant([L.tool('e1', 'Read', { file_path: '/data/OpenBot/Shared/escritorio-virtual/02.md' })]));
+    const sem = one(L.assistant([L.tool('e2', 'Agent', { description: 'x', prompt: `${REPO}/a` })]));
+    expect(fora.signals.some((s) => s.type === 'repoHint')).toBe(false);
+    expect(sem.signals.some((s) => s.type === 'repoHint')).toBe(false);
+  });
+
+  it('Bash com cd emite repoHint', () => {
+    const r = one(L.assistant([L.tool('b1', 'Bash', { command: `cd ${REPO} && npm test` })]));
+    expect(r.signals).toContainEqual(expect.objectContaining({ type: 'repoHint', repo: REPO }));
+  });
+});
