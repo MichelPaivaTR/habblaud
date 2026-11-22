@@ -39,7 +39,7 @@ describe('loadConfig: repositórios e nomes', () => {
     expect(cfg.agentNamesFile).toBe('/data/nomes.json');
   });
 
-  it('combinação de produção desliga terminal, mensagens, World, atualização e Codex', () => {
+  it('combinação de produção: leitura pela tailnet, terminal e mensagens desligados, World, atualização e Codex desligados', () => {
     const cfg = loadConfig(
       {
         HOME: tmp.dir,
@@ -48,11 +48,13 @@ describe('loadConfig: repositórios e nomes', () => {
         HABBLAUD_WORLD: '0',
         HABBLAUD_UPDATE_CHECK: '0',
         HABBLAUD_CODEX: '0',
+        HABBLAUD_VIEW_REMOTE: '1',
       },
       [],
     );
     expect(cfg.host).toBe('100.81.240.92');
     expect(cfg.inDocker).toBe(false);
+    expect(cfg.view).toBe(true);
     expect(cfg.terminal).toBe(false);
     expect(cfg.messages).toBe(false);
     expect(cfg.world.enabled).toBe(false);
