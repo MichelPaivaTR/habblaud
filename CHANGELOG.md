@@ -18,7 +18,8 @@ do meio (0.**3**.0).
   continua sendo a pasta da sessão.
 - **Visualização pela tailnet (`HABBLAUD_VIEW_REMOTE=1`).** Com `HABBLAUD_HOST` num IP da tailnet, o terminal, o histórico de
   sessões e o filtro “Só prompts” ficam disponíveis só para leitura. Enviar mensagens, digitar, permissões e entregas
-  continuam bloqueados. Sem a flag, ou com um host fora da tailnet, nada muda.
+  continuam bloqueados, e a caixa de mensagem mostra “Somente leitura”. Sem a flag, ou com um host fora da tailnet,
+  nada muda.
 - **Nome do agente do OpenBot (`HABBLAUD_AGENT_NAMES_FILE`).** Com o arquivo de nomes configurado, o personagem de cada
   agente do OpenBot mostra o nome dele no OpenBot, com a mesma aparência em todo reinício. Sem nome no arquivo, aparece
   `agent-` e os 8 primeiros caracteres do id.

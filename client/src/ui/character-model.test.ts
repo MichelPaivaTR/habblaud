@@ -9,6 +9,10 @@ const OPEN = { live: true, terminal: true, local: true, replaying: false, mock: 
 const MAIN = { id: '.claude:1', kind: 'main', status: 'working' } as const;
 
 describe('canEditCharacter', () => {
+  it('sem acesso local (modo de visualização pela tailnet) o lápis não aparece', () => {
+    expect(canEditCharacter(MAIN, { ...OPEN, local: false })).toBe(false);
+  });
+
   it('só o principal real, ao vivo, com acesso local (fora do timelapse e do mock)', () => {
     expect(canEditCharacter(MAIN, OPEN)).toBe(true);
     expect(canEditCharacter({ ...MAIN, id: 's:sub', kind: 'sub' }, OPEN)).toBe(false);
