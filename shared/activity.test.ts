@@ -233,3 +233,39 @@ describe('AskUserQuestion no escritório', () => {
     expect(describeTool('AskUserQuestion', {}).questions).toBeUndefined();
   });
 });
+
+describe('maskSecrets: formatos de segredo que não podem aparecer no terminal exibido pela tailnet (T16)', () => {
+  const SECRETS = [
+    'sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789',
+    'sk-proj-AbCdEfGhIjKlMnOp1234567890',
+    'ghp_1234567890abcdefghijklmnop',
+    'github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz',
+    'glpat-abcdefghijklmnop1234',
+    'AKIAIOSFODNN7EXAMPLE',
+    'AIzaSyD-abcdefghijklmnopqrstuvwxyz1234',
+    'xoxb-1234567890-abcdefgh',
+    'sk_live_51HabcdEFGHIJKLMN',
+    'npm_abcdefghijklmnopqrstuvwxyz0123456789',
+    'hf_abcdefghijklmnopqrstuvwxyz0123456789',
+    'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.abcdefghijk',
+    'Authorization: Bearer abcdef123456',
+    'DB_PASSWORD=supersecret123',
+    'postgres://user:hunter2@db.local/app',
+    '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----',
+    'curl --token abc123SECRET456 https://x',
+    '"password": "hunter22"',
+  ];
+
+  it.each(SECRETS)('mascara %s', (secret) => {
+    const out = maskSecrets(`antes ${secret} depois`);
+    expect(out).toContain('antes ');
+    for (const part of ['abcdefgh', 'supersecret123', 'hunter2', 'SECRET456', 'hunter22', 'MIIEpAIBAAKCAQEA', 'abcdef123456']) {
+      if (secret.includes(part)) expect(out).not.toContain(part);
+    }
+    expect(out).not.toBe(`antes ${secret} depois`);
+  });
+
+  it('texto comum e comandos sem segredo ficam como estão', () => {
+    expect(maskSecrets('npm test && git status')).toBe('npm test && git status');
+  });
+});
