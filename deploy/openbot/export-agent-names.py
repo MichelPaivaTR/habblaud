@@ -8,12 +8,16 @@ import argparse
 import datetime
 import json
 import os
+import re
 import sqlite3
 import sys
+import tempfile
 
 DEFAULT_DB = '/data/.config/OpenBot/openbot.db'
 DEFAULT_OUT = '/data/OpenBot/Shared/escritorio-virtual/agent-names.json'
 QUERY = "SELECT agent_id, json_extract(agent_json, '$.name') FROM projection_agents"
+NAME_MAX = 80
+CONTROL = re.compile(r'[\x00-\x1f\x7f]')
 
 
 class ExportError(Exception):
@@ -33,8 +37,12 @@ def read_names(db_path):
         raise ExportError(f'não consegui ler projection_agents: {err}') from err
     agents = {}
     for agent_id, name in rows:
-        if isinstance(agent_id, str) and isinstance(name, str) and name.strip():
-            agents[agent_id] = name.strip()
+        if not isinstance(agent_id, str) or not isinstance(name, str):
+            continue
+        # Segunda barreira (o Habblaud valida de novo): sem controle, espaços colapsados, no máximo NAME_MAX caracteres.
+        clean = ' '.join(CONTROL.sub(' ', name).split())[:NAME_MAX].strip()
+        if clean:
+            agents[agent_id] = clean
     if not agents:
         raise ExportError('nenhum agente com nome no banco; mantive o arquivo anterior')
     return agents
@@ -46,14 +54,19 @@ def write_atomic(out_path, agents):
         'generatedAt': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         'agents': agents,
     }
-    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-    tmp = f'{out_path}.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-        f.write('\n')
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, out_path)
+    folder = os.path.dirname(os.path.abspath(out_path))
+    os.makedirs(folder, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix='.agent-names-', suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+            f.write('\n')
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, out_path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 def export(db_path, out_path):

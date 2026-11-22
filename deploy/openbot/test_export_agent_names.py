@@ -85,6 +85,20 @@ class ExportAgentNamesTest(unittest.TestCase):
         self.assertEqual(exporter.main(['--db', self.db, '--out', self.out]), 1)
         self.assertIn('antigo', Path(self.out).read_text(encoding='utf-8'))
 
+    def test_nome_com_controle_ou_longo_e_limpo_ou_descartado(self):
+        make_db(self.db, [(ID_A, {'name': 'Faísca\n\x07 Rampa'}), (ID_B, {'name': 'x' * 500}), ('agent-x', {'name': ' \t '})])
+        self.assertEqual(exporter.main(['--db', self.db, '--out', self.out]), 0)
+        agents = json.loads(Path(self.out).read_text(encoding='utf-8'))['agents']
+        self.assertEqual(agents[ID_A], 'Faísca Rampa')
+        self.assertEqual(len(agents[ID_B]), 80)
+        self.assertNotIn('agent-x', agents)
+
+    def test_nao_deixa_temporario_no_diretorio_nem_com_nome_fixo(self):
+        make_db(self.db, [(ID_A, {'name': 'Faísca'})])
+        Path(self.out).write_text('{"version":1,"agents":{"x":"antigo"}}', encoding='utf-8')
+        self.assertEqual(exporter.main(['--db', self.db, '--out', self.out]), 0)
+        self.assertEqual(sorted(os.listdir(self.dir)), sorted(['openbot.db', 'agent-names.json']))
+
     def test_nao_deixa_arquivo_temporario_nem_altera_o_banco(self):
         make_db(self.db, [(ID_A, {'name': 'Faísca'})])
         before = Path(self.db).read_bytes()
