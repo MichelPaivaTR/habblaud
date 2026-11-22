@@ -1509,6 +1509,7 @@ export const ES: Readonly<Record<string, string>> = {
   "🏗️ Nova sala: {0}": "🏗️ Nueva sala: {0}",
   "🚚 {0} foi para {1}": "🚚 {0} se fue a {1}",
   "Sem repositório": "Sin repositorio",
+  "Arquivo de nomes do OpenBot ilegível; mantenho os nomes anteriores.": "Archivo de nombres de OpenBot ilegible; mantengo los nombres anteriores.",
   "Somente leitura": "Solo lectura",
   "👋 {0} chegou em {1}{2}": "👋 {0} llegó a {1}{2}",
   "🚪 {0} encerrou a sessão": "🚪 {0} cerró la sesión",

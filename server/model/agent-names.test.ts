@@ -81,6 +81,18 @@ describe('AgentNames', () => {
     expect(names().nameOf(ID)).toBe('Faísca 2.0');
   });
 
+  it('arquivo corrompido depois de um bom: os nomes anteriores continuam; o bom seguinte volta a valer', () => {
+    writeFileSync(file(), JSON.stringify({ agents: { [ID]: 'Faísca' } }));
+    const n = names();
+    expect(n.nameOf(ID)).toBe('Faísca');
+    writeFileSync(file(), '{ não é json');
+    clock += 30_000;
+    expect(n.nameOf(ID)).toBe('Faísca');
+    writeFileSync(file(), JSON.stringify({ agents: { [ID]: 'Rampa' } }));
+    clock += 30_000;
+    expect(n.nameOf(ID)).toBe('Rampa');
+  });
+
   it('recarrega quando o arquivo muda, no máximo a cada 30 s', () => {
     writeFileSync(file(), JSON.stringify({ agents: { [ID]: 'Faísca' } }));
     const n = names();

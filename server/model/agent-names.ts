@@ -2,6 +2,8 @@
 // (deploy/openbot/export-agent-names.py) e de um arquivo `.override.json` ao lado, que vence. Sem arquivo, o mapa é vazio.
 import { readFileSync, statSync } from 'node:fs';
 import { parseCharacterName } from '../../shared/appearance';
+import { log } from '../log';
+import { tr } from '../../shared/i18n';
 
 const OPENBOT_CWD = /^\/data\/OpenBot\/Agents\/(agent-[0-9a-f-]{36})(\/|$)/;
 const RECHECK_MS = 30_000;
@@ -29,16 +31,23 @@ function stampOf(file: string): string {
   }
 }
 
-function readNames(file: string): Array<[string, string]> {
+/** Sem o arquivo, nenhum nome; existente mas ilegível, undefined (o mapa anterior continua valendo). */
+function readNames(file: string): Array<[string, string]> | undefined {
+  let text: string;
   try {
-    const j = JSON.parse(readFileSync(file, 'utf8')) as { agents?: Record<string, unknown> };
+    text = readFileSync(file, 'utf8');
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? [] : undefined;
+  }
+  try {
+    const j = JSON.parse(text) as { agents?: Record<string, unknown> };
     // O nome vem de fora: o mesmo critério dos personagens (NFC, sem controle, até NAME_MAX). Nome recusado vira o padrão.
     return Object.entries(j.agents ?? {}).flatMap(([id, name]) => {
       const clean = parseCharacterName(name);
       return clean ? [[id, clean] as [string, string]] : [];
     });
   } catch {
-    return [];
+    return undefined;
   }
 }
 
@@ -65,7 +74,13 @@ export class AgentNames {
     const override = overrideFileOf(this.file);
     const stamp = `${stampOf(this.file)}|${stampOf(override)}`;
     if (stamp === this.stamp) return;
+    const exported = readNames(this.file);
+    const manual = readNames(override);
+    if (!exported || !manual) {
+      log.warnOnce(`names:${stamp}`, tr('Arquivo de nomes do OpenBot ilegível; mantenho os nomes anteriores.'));
+      return;
+    }
     this.stamp = stamp;
-    this.names = new Map([...readNames(this.file), ...readNames(override)]);
+    this.names = new Map([...exported, ...manual]);
   }
 }
