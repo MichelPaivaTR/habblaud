@@ -10,6 +10,13 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Adicionado
+
+- **Salas por repositório (`HABBLAUD_REPO_ROOTS`).** Com as pastas dos repositórios configuradas, a sala de cada agente é o
+  repositório onde ele trabalhou por último (pelos arquivos e comandos que usou). Quem não está em nenhum fica em “Sem
+  repositório”, e a sala volta para lá após 30 min sem evidência ou ao trocar de sessão (`/clear`). Sem a variável, a sala
+  continua sendo a pasta da sessão.
+
 ## [1.0.3] - 2026-10-16
 
 ### Corrigido

@@ -77,6 +77,8 @@ names.load();
 // Nomes de sala escolhidos pelo usuário (botão direito > Renomear).
 const roomAliases = new RoomAliases(join(config.dataDir, 'rooms.json'));
 roomAliases.load();
+// Com repositórios configurados, a primeira raiz é a sala comum dos agentes sem repositório.
+if (config.repoRoots[0]) roomAliases.setDefault(config.repoRoots[0], tr('Sem repositório'));
 
 // Office, contas e fontes de agentes se referenciam (avisos de mudança / fontes): ligação tardia.
 const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry; ptys?: PtyManager; ptyOff?: string } = {};
@@ -116,6 +118,7 @@ const accounts = new AccountsService({
 const office = new Office({
   names,
   roomAlias: (path) => roomAliases.get(path),
+  repoRoots: config.repoRoots,
   version: config.version,
   // No modo dev o Vite serve o cliente direto do código-fonte: não há build para comparar.
   build: config.dev ? undefined : createBuildReader(config.rootDir),

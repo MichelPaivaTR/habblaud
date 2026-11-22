@@ -30,6 +30,7 @@ import { describeGitHubEvent, githubEventKey, RoomEffects, type GitHubEvent } fr
 import { hash32 } from '../../shared/hash';
 import { applyPermission } from '../permissions/registry';
 import type { NameStore, StoredCharacter } from './names';
+import { repoRoomOf } from './repo-room';
 import { normalizeCwd, roomDisplayNames, SlotAllocator } from './rooms';
 import { tr } from '../../shared/i18n';
 import type { WorldMeta } from '../../shared/world/api';
@@ -37,6 +38,8 @@ import type { WorldMeta } from '../../shared/world/api';
 export const OFFLINE_GRACE_MS = 20_000;
 export const DONE_GRACE_MS = 25_000;
 export const SLOT_COOLDOWN_MS = 30_000;
+/** Sem evidência de repositório por este tempo, o agente volta para a sala comum. */
+export const REPO_TTL_MS = 30 * 60_000;
 export const NOTICE_DEDUPE_MS = 10_000;
 /** Aviso "está esperando o shell": no máximo um a cada 10 min por agente. */
 export const SHELL_NOTICE_DEDUPE_MS = 600_000;
@@ -80,6 +83,8 @@ export interface OfficeDeps {
   ptys?: () => { status: PtyStatus; list: PtyInfo[] };
   /** Habblaud World (WorldService.meta; ver OfficeSnapshot.meta.world). */
   world?: () => WorldMeta;
+  /** Raízes dos repositórios (HABBLAUD_REPO_ROOTS): com elas a sala é o repositório; a primeira raiz é a sala comum. */
+  repoRoots?: string[];
   now?: () => number;
 }
 
@@ -123,6 +128,8 @@ interface AgentRecord {
   info: AgentInfo;
   history: Activity[];
   removeAt?: number;
+  /** Última evidência de repositório do principal (sala = repositório) e o instante dela. */
+  repo?: { room: string; at: number };
   /** Início do turno atual (para "Concluiu em X"). */
   turnStart?: number;
   /** Atividade "Concluiu" sintetizada pela mudança de status (substituída pela do transcript, se vier). */
@@ -217,9 +224,11 @@ export class Office {
   private effects = new RoomEffects();
   private seq = 0;
   private readonly now: () => number;
+  private readonly repoRoots: string[];
 
   constructor(private readonly deps: OfficeDeps) {
     this.now = deps.now ?? Date.now;
+    this.repoRoots = deps.repoRoots ?? [];
   }
 
   /** Avisado (síncrono) sempre que algo muda; o hub decide quando fazer commit(). */
@@ -322,7 +331,7 @@ export class Office {
       this.setStatus(p.id, p.status, p.waitingFor);
       return;
     }
-    const roomId = normalizeCwd(p.cwd);
+    const roomId = this.startRoom(p.cwd);
     this.ensureRoom(roomId, now);
     const chosen = this.roomCharacter(roomId, p.id, p.sessionId);
     // A mesma sessão retomada noutro processo (ex.: "Assumir aqui") mantém o nome, mesmo com o processo antigo
@@ -377,8 +386,25 @@ export class Office {
     info.tasks = [];
     info.stats = zeroStats();
     delete info.title;
+    if (this.repoRoots.length) {
+      delete rec.repo;
+      if (info.roomId !== this.repoRoots[0]) this.moveTree(id, this.repoRoots[0]);
+    }
     this.addActivity(id, { id: `${id}#clear:${++this.seq}`, at: this.now(), ...SPECIAL.cleared() }, true);
     this.markDirty();
+  }
+
+  /**
+   * Evidência de repositório (ferramenta do principal ou de um subagente dele): o principal e a família vão para a
+   * sala desse repositório. Vale a última evidência; uma mais velha que o TTL é ignorada.
+   */
+  setRepo(id: string, room: string, at: number): void {
+    if (!this.repoRoots.length) return;
+    const main = this.mainOf(id);
+    if (!main || this.now() - at > REPO_TTL_MS) return;
+    if (main.repo && at < main.repo.at) return;
+    main.repo = { room, at };
+    if (main.info.roomId !== room) this.moveTree(main.info.id, room);
   }
 
   setStatus(id: string, status: AgentStatus, waitingFor?: string): void {
@@ -919,6 +945,7 @@ export class Office {
       this.pendingNotices.push(...r.notices);
       if (r.changed || r.feed.length || r.notices.length) this.markDirty();
     }
+    if (this.repoRoots.length) this.sweepRepos(now);
     let removed = false;
     for (const [id, rec] of this.agents) {
       if (rec.removeAt !== undefined && now >= rec.removeAt) {
@@ -1043,6 +1070,48 @@ export class Office {
     this.rooms.set(roomId, { path: roomId, createdAt: now });
     this.recomputeRoomNames();
     this.notice('room', roomId, 'info', tr('🏗️ Nova sala: {0}', [this.roomName(roomId)]), roomId);
+  }
+
+  /** Sala de quem chega: o repositório da pasta da sessão, ou a sala comum. */
+  private startRoom(cwd: string): string {
+    if (!this.repoRoots.length) return normalizeCwd(cwd);
+    return repoRoomOf(cwd, this.repoRoots) ?? this.repoRoots[0];
+  }
+
+  /** Principal de um agente (um subagente sobe até o pai). */
+  private mainOf(id: string): AgentRecord | undefined {
+    let rec = this.agents.get(id);
+    for (let i = 0; rec?.info.kind === 'sub' && i < 16; i++) rec = rec.info.parentId ? this.agents.get(rec.info.parentId) : undefined;
+    return rec?.info.kind === 'main' ? rec : undefined;
+  }
+
+  /** Leva o principal e os subagentes dele para a sala. */
+  private moveTree(mainId: string, roomId: string): void {
+    const rec = this.agents.get(mainId);
+    if (!rec) return;
+    const from = rec.info.roomId;
+    this.ensureRoom(roomId, this.now());
+    rec.info.roomId = roomId;
+    for (const sub of this.descendants(mainId)) sub.info.roomId = roomId;
+    this.notice('room', mainId, 'info', tr('🚚 {0} foi para {1}', [rec.info.name, this.roomName(roomId)]), roomId);
+    this.dropRoomIfEmpty(from);
+    this.markDirty();
+  }
+
+  private dropRoomIfEmpty(roomId: string): void {
+    if (!this.rooms.has(roomId)) return;
+    for (const r of this.agents.values()) if (r.info.roomId === roomId) return;
+    this.rooms.delete(roomId);
+    this.recomputeRoomNames();
+  }
+
+  /** Principal sem evidência de repositório há mais que REPO_TTL_MS volta para a sala comum. */
+  private sweepRepos(now: number): void {
+    for (const rec of this.agents.values()) {
+      if (rec.info.kind !== 'main' || !rec.repo || now - rec.repo.at <= REPO_TTL_MS) continue;
+      delete rec.repo;
+      if (rec.info.roomId !== this.repoRoots[0]) this.moveTree(rec.info.id, this.repoRoots[0]);
+    }
   }
 
   private recomputeRoomNames(): void {

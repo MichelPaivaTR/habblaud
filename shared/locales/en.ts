@@ -1508,6 +1508,8 @@ export const EN: Readonly<Record<string, string>> = {
   "Recusado no Habblaud": "Denied in Habblaud",
   "✋ {0} precisa de você em {1}: {2}": "✋ {0} needs you in {1}: {2}",
   "🏗️ Nova sala: {0}": "🏗️ New room: {0}",
+  "🚚 {0} foi para {1}": "🚚 {0} moved to {1}",
+  "Sem repositório": "No repository",
   "👋 {0} chegou em {1}{2}": "👋 {0} arrived in {1}{2}",
   "🚪 {0} encerrou a sessão": "🚪 {0} ended the session",
   "Juntando os resultados da equipe": "Gathering the team's results",
