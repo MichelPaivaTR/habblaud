@@ -1,14 +1,14 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { Activity } from '../../shared/types';
+import type { AccountInfo, Activity } from '../../shared/types';
 import { nameKey } from '../../shared/appearance';
 import { hash32 } from '../../shared/hash';
 import { NAME_POOL } from '../../shared/names';
 import { setQuiet } from '../log';
 import { tempDir } from '../test/fixtures';
 import { NameStore } from './names';
-import { DONE_GRACE_MS, Office, OFFLINE_GRACE_MS, REPO_TTL_MS, SNAPSHOT_RECENT } from './office';
+import { DONE_GRACE_MS, Office, type OfficeDeps, OFFLINE_GRACE_MS, REPO_TTL_MS, SNAPSHOT_RECENT } from './office';
 import { normalizeCwd, roomDisplayNames, SlotAllocator } from './rooms';
 
 setQuiet(true);
@@ -989,5 +989,34 @@ describe('Office: nome do agente do OpenBot', () => {
     const office = new Office(d);
     office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/loja', role: 'Agente principal', startedAt: 0, status: 'idle' });
     expect(d.names.get('s1')).toBeDefined();
+  });
+});
+
+describe('Office: contas no modo de visualização', () => {
+  const account = {
+    id: '.claude',
+    short: 'A',
+    name: 'Conta A',
+    color: '#f08a3c',
+    configDir: '/data/.claude',
+    email: 'pessoa@exemplo.com',
+    organization: 'Org Secreta',
+    plan: 'Max',
+    sessions: 0,
+    usageStatus: 'disabled',
+  } as unknown as AccountInfo;
+  const deps = (extra: Partial<OfficeDeps> = {}) =>
+    new Office({ names: new NameStore(null), version: 't', startedAt: 0, accounts: () => [account], sources: () => [], accountName: () => undefined, ...extra });
+
+  it('com view: e-mail e organização somem; plano e nome ficam', () => {
+    const [acc] = deps({ view: true }).commit().snapshot.accounts;
+    expect(acc).not.toHaveProperty('email');
+    expect(acc).not.toHaveProperty('organization');
+    expect(acc).toMatchObject({ id: '.claude', name: 'Conta A', plan: 'Max' });
+  });
+
+  it('sem view: iguais a antes', () => {
+    const [acc] = deps().commit().snapshot.accounts;
+    expect(acc).toMatchObject({ email: 'pessoa@exemplo.com', organization: 'Org Secreta' });
   });
 });

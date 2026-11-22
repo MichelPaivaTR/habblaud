@@ -85,6 +85,8 @@ export interface OfficeDeps {
   world?: () => WorldMeta;
   /** Raízes dos repositórios (HABBLAUD_REPO_ROOTS): com elas a sala é o repositório; a primeira raiz é a sala comum. */
   repoRoots?: string[];
+  /** Modo de visualização pela tailnet (ServerConfig.view): e-mail e organização das contas não saem no snapshot. */
+  view?: boolean;
   now?: () => number;
 }
 
@@ -178,6 +180,12 @@ function isOpenQuestion(a: Activity | undefined): boolean {
 
 function zeroStats(): AgentStats {
   return { toolCalls: 0, tokensIn: 0, tokensOut: 0, subagents: 0 };
+}
+
+/** Conta sem e-mail e organização (o que a tailnet não precisa ver); plano e uso ficam. */
+function hideAccountContact(a: AccountInfo): AccountInfo {
+  const { email: _email, organization: _organization, ...rest } = a;
+  return rest;
 }
 
 function cloneAgent(a: AgentInfo): AgentInfo {
@@ -1023,7 +1031,7 @@ export class Office {
       serverTime: now,
       rooms,
       agents: [...real, ...demoAgents].map(trim),
-      accounts: [...this.deps.accounts(sessions), ...(this.demoSnap?.accounts ?? [])],
+      accounts: [...this.deps.accounts(sessions), ...(this.demoSnap?.accounts ?? [])].map((a) => (this.deps.view ? hideAccountContact(a) : a)),
       ...(ptys ? { ptys: ptys.list } : {}),
       meta: {
         demo: this.isDemo(),
