@@ -93,6 +93,26 @@ else
     END { print n + 0 }
   ' - /proc/net/tcp /proc/net/tcp6)
   if [ "$out" = 0 ]; then ok "sem conexão de saída do PID $PID"; else fail "$out conexão(ões) de saída do PID $PID"; fi
+
+  # Endereço de escuta: o socket LISTEN da porta, do PID do serviço, tem de estar no IP informado (não em 0.0.0.0 nem ::).
+  # /proc guarda o IPv4 em hexadecimal little-endian (100.81.240.92 aparece como 5CF05164).
+  ip_hex=$(IFS=. read -r a b c d <<< "$HOST"; printf '%02X%02X%02X%02X' "$d" "$c" "$b" "$a")
+  listen=$(printf '%s\n' $inodes | awk -v port="$port_hex" -v ip="$ip_hex" '
+    NR == FNR { owned[$1] = 1; next }
+    FNR > 1 && $4 == "0A" && ($10 in owned) {
+      split($2, local, ":")
+      if (local[2] != port) next
+      if (local[1] == ip) good++
+      else if (local[1] ~ /^0+$/) wildcard++
+      else other++
+    }
+    END { print good + 0, wildcard + 0, other + 0 }
+  ' - /proc/net/tcp /proc/net/tcp6)
+  read -r good wildcard other <<< "$listen"
+  if [ "$wildcard" != 0 ]; then fail "o serviço escuta em todas as interfaces (0.0.0.0 ou ::) na porta $PORT"
+  elif [ "$other" != 0 ] && [ "$good" = 0 ]; then fail "o serviço escuta em outro endereço, não em $HOST"
+  elif [ "$good" != 0 ]; then ok "escuta só em $HOST:$PORT"
+  else fail "sem socket de escuta em $HOST:$PORT para o PID $PID"; fi
 fi
 
 # /data/.claude não muda: hash do settings.json e a lista de nomes do primeiro nível. Sem linha de base, grava a atual.
