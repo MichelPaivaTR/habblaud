@@ -930,3 +930,64 @@ describe('Office: sala por repositório', () => {
     expect(office.get('acc:1')?.roomId).toBe('/p/loja');
   });
 });
+
+describe('Office: nome do agente do OpenBot', () => {
+  const ID = 'agent-3d36e8ea-5d84-4d50-9be7-d88973e927bc';
+  const deps = () => ({ names: new NameStore(null), version: 't', startedAt: 0, accounts: () => [], sources: () => [], accountName: () => undefined });
+  const main = (office: Office, sessionId: string, name = 'Faísca', agentId = ID) =>
+    office.addMain({
+      id: `.claude:${sessionId}`,
+      account: 'acc',
+      sessionId,
+      cwd: `/data/OpenBot/Agents/${agentId}`,
+      role: 'Agente principal',
+      startedAt: 0,
+      status: 'idle',
+      openbot: { agentId, name },
+    });
+
+  it('usa o nome do OpenBot com a mesma aparência em duas instâncias (CA2.2)', () => {
+    const a = new Office(deps());
+    const b = new Office(deps());
+    main(a, 's1');
+    main(b, 's1');
+    expect(a.get('.claude:s1')?.name).toBe('Faísca');
+    expect(a.get('.claude:s1')).toMatchObject({ look: b.get('.claude:s1')?.look, seed: b.get('.claude:s1')?.seed });
+  });
+
+  it('não grava o nome no NameStore (nada em names.json)', () => {
+    const d = deps();
+    main(new Office(d), 's1');
+    expect(d.names.get('s1')).toBeUndefined();
+  });
+
+  it('o /clear mantém o nome e não passa pelo NameStore', () => {
+    const d = deps();
+    const office = new Office(d);
+    main(office, 's1');
+    office.switchSession('.claude:s1', 's2');
+    expect(office.get('.claude:s1')?.name).toBe('Faísca');
+    expect(d.names.get('s2')).toBeUndefined();
+  });
+
+  it('duas sessões do mesmo agente recebem "Faísca" e "Faísca 2"', () => {
+    const office = new Office(deps());
+    main(office, 's1');
+    main(office, 's2');
+    expect(office.get('.claude:s1')?.name).toBe('Faísca');
+    expect(office.get('.claude:s2')?.name).toBe('Faísca 2');
+  });
+
+  it('sem nome no arquivo: agent- e os 8 primeiros caracteres do uuid', () => {
+    const office = new Office(deps());
+    main(office, 's1', 'agent-3d36e8ea');
+    expect(office.get('.claude:s1')?.name).toBe('agent-3d36e8ea');
+  });
+
+  it('sem o campo openbot: nome sorteado, como antes', () => {
+    const d = deps();
+    const office = new Office(d);
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/loja', role: 'Agente principal', startedAt: 0, status: 'idle' });
+    expect(d.names.get('s1')).toBeDefined();
+  });
+});

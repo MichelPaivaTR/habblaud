@@ -12,7 +12,8 @@ import { SPECIAL } from '../../shared/activity';
 import type { Activity, AgentStatus, SourceInfo } from '../../shared/types';
 import type { AccountsService } from '../accounts/service';
 import { errMsg, log } from '../log';
-import type { Office, TranscriptSummary } from '../model/office';
+import { agentIdFromCwd, AgentNames, fallbackAgentName } from '../model/agent-names';
+import type { MainInput, Office, TranscriptSummary } from '../model/office';
 import { compareVersions, registryStatus, RegistryReader, SHELL_STATUS_VERSION, type RegistryEntry } from './registry';
 import { SHELL_FALLBACK_MAX_AGE_MS, ShellTracker, toShellJob, type ShellFinish } from './shells';
 import type { AgentSource } from './source';
@@ -58,6 +59,8 @@ export interface WatcherOptions {
   watch?: boolean;
   /** Raízes dos repositórios (HABBLAUD_REPO_ROOTS): as chamadas de ferramenta viram sinais repoHint. */
   repoRoots?: string[];
+  /** Nomes dos agentes do OpenBot (HABBLAUD_AGENT_NAMES_FILE); ausente = nomes sorteados. */
+  agentNames?: AgentNames;
 }
 
 /** cwd -> nome da pasta em projects/ (todo caractere não alfanumérico vira "-"). */
@@ -303,6 +306,13 @@ export class ClaudeWatcher implements AgentSource {
     }
   }
 
+  /** Agente do OpenBot da sessão, com o nome do arquivo (ou o padrão); undefined sem o arquivo ou fora da pasta de agentes. */
+  private openbotOf(cwd: string): MainInput['openbot'] {
+    const agentId = agentIdFromCwd(cwd);
+    if (!agentId || !this.opts.agentNames) return undefined;
+    return { agentId, name: this.opts.agentNames.nameOf(agentId) ?? fallbackAgentName(agentId) };
+  }
+
   private syncSession(key: string, accountId: string, dir: string, entry: RegistryEntry, boot: boolean): void {
     const office = this.opts.office;
     let t = this.sessions.get(key);
@@ -319,6 +329,7 @@ export class ClaudeWatcher implements AgentSource {
         startedAt: entry.startedAt ?? this.now(),
         status: st.status ?? 'idle',
         waitingFor: st.waitingFor,
+        openbot: this.openbotOf(entry.cwd),
       });
     } else if (t.sessionId !== entry.sessionId) {
       // /clear ou /resume no mesmo processo: mesmo personagem, transcript novo.

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentInfo, Notice } from '../../shared/types';
 import { AccountsService } from '../accounts/service';
 import { setQuiet } from '../log';
+import { AgentNames } from '../model/agent-names';
 import { NameStore } from '../model/names';
 import { Office } from '../model/office';
 import { appendLines, L, tempDir, writeLines } from '../test/fixtures';
@@ -14,7 +15,7 @@ setQuiet(true);
 
 const CWD = '/projetos/loja';
 
-function setup(opts: { tailBytes?: number; repoRoots?: string[] } = {}) {
+function setup(opts: { tailBytes?: number; repoRoots?: string[]; agentNames?: AgentNames } = {}) {
   const tmp = tempDir();
   const home = tmp.dir;
   const dir = join(home, '.claude');
@@ -51,6 +52,7 @@ function setup(opts: { tailBytes?: number; repoRoots?: string[] } = {}) {
     watch: false,
     tailBytes: opts.tailBytes,
     repoRoots: opts.repoRoots,
+    agentNames: opts.agentNames,
   });
   const notices: Notice[] = [];
 
@@ -821,5 +823,34 @@ describe('ClaudeWatcher — sala por repositório', () => {
     c.poll();
     expect(mainAgent().roomId).toBe(`${REPOS}/gamma`);
     expect(c.agent('sess-r:g1')?.roomId).toBe(`${REPOS}/gamma`);
+  });
+});
+
+describe('ClaudeWatcher — nome do agente do OpenBot', () => {
+  const ID = 'agent-3d36e8ea-5d84-4d50-9be7-d88973e927bc';
+  let c: Ctx;
+  let names: { dir: string; cleanup: () => void };
+  beforeEach(() => {
+    names = tempDir();
+    writeFileSync(join(names.dir, 'names.json'), JSON.stringify({ agents: { [ID]: 'Faísca' } }));
+  });
+  afterEach(() => {
+    c.watcher.stop();
+    c.tmp.cleanup();
+    names.cleanup();
+  });
+
+  it('sessão na pasta de um agente do OpenBot usa o nome do arquivo de nomes', () => {
+    c = setup({ agentNames: new AgentNames(join(names.dir, 'names.json')) });
+    c.openSession(100, 'sess-o', { cwd: `/data/OpenBot/Agents/${ID}` });
+    c.watcher.boot();
+    expect(c.agents().find((a) => a.kind === 'main')?.name).toBe('Faísca');
+  });
+
+  it('sem o arquivo configurado, o nome é o sorteado, como antes', () => {
+    c = setup();
+    c.openSession(100, 'sess-o', { cwd: `/data/OpenBot/Agents/${ID}` });
+    c.watcher.boot();
+    expect(c.agents().find((a) => a.kind === 'main')?.name).not.toBe('Faísca');
   });
 });

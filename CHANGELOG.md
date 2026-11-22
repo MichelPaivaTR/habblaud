@@ -16,6 +16,9 @@ do meio (0.**3**.0).
   repositório onde ele trabalhou por último (pelos arquivos e comandos que usou). Quem não está em nenhum fica em “Sem
   repositório”, e a sala volta para lá após 30 min sem evidência ou ao trocar de sessão (`/clear`). Sem a variável, a sala
   continua sendo a pasta da sessão.
+- **Nome do agente do OpenBot (`HABBLAUD_AGENT_NAMES_FILE`).** Com o arquivo de nomes configurado, o personagem de cada
+  agente do OpenBot mostra o nome dele no OpenBot, com a mesma aparência em todo reinício. Sem nome no arquivo, aparece
+  `agent-` e os 8 primeiros caracteres do id.
 
 ## [1.0.3] - 2026-10-16
 

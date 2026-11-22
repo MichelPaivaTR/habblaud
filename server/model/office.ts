@@ -112,6 +112,8 @@ export interface MainInput {
   startedAt: number;
   status: AgentStatus;
   waitingFor?: string;
+  /** Agente do OpenBot (pasta agent-<uuid>): nome dele no OpenBot, sem sorteio nem personagem salvo. */
+  openbot?: { agentId: string; name: string };
 }
 
 export interface SubInput {
@@ -130,6 +132,8 @@ interface AgentRecord {
   removeAt?: number;
   /** Última evidência de repositório do principal (sala = repositório) e o instante dela. */
   repo?: { room: string; at: number };
+  /** Nome vindo do OpenBot: não passa pelo NameStore (nada de names.json). */
+  fixedName?: boolean;
   /** Início do turno atual (para "Concluiu em X"). */
   turnStart?: number;
   /** Atividade "Concluiu" sintetizada pela mudança de status (substituída pela do transcript, se vier). */
@@ -333,10 +337,10 @@ export class Office {
     }
     const roomId = this.startRoom(p.cwd);
     this.ensureRoom(roomId, now);
-    const chosen = this.roomCharacter(roomId, p.id, p.sessionId);
+    const chosen = p.openbot ? undefined : this.roomCharacter(roomId, p.id, p.sessionId);
     // A mesma sessão retomada noutro processo (ex.: "Assumir aqui") mantém o nome, mesmo com o processo antigo
     // ainda saindo do escritório.
-    const person = chosen ?? this.deps.names.assign(p.sessionId, this.takenNames(undefined, p.sessionId));
+    const person = p.openbot ? this.openbotPerson(p.openbot) : (chosen ?? this.deps.names.assign(p.sessionId, this.takenNames(undefined, p.sessionId)));
     const info: AgentInfo = {
       id: p.id,
       kind: 'main',
@@ -353,7 +357,7 @@ export class Office {
       lastEventAt: p.startedAt,
       statusSince: now,
       stats: zeroStats(),
-      seed: chosen?.seed ?? hash32(p.id),
+      seed: p.openbot ? hash32(p.openbot.agentId) : (chosen?.seed ?? hash32(p.id)),
     };
     if (p.provider && p.provider !== 'claude') info.provider = p.provider;
     if (chosen) {
@@ -362,6 +366,7 @@ export class Office {
     }
     if (p.status === 'waiting') info.waitingFor = p.waitingFor ?? tr('responder no terminal');
     const rec: AgentRecord = { info, history: [] };
+    if (p.openbot) rec.fixedName = true;
     if (p.status === 'working') rec.turnStart = now;
     this.agents.set(p.id, rec);
     const acc = this.deps.accountName(p.account);
@@ -379,7 +384,7 @@ export class Office {
     if (info.custom) {
       const owner = this.deps.names.character(info.roomId)?.owner;
       if (owner === undefined || owner === info.sessionId) this.deps.names.claimCharacter(info.roomId, sessionId);
-    } else {
+    } else if (!rec.fixedName) {
       this.deps.names.remember(sessionId, { name: info.name, look: info.look });
     }
     info.sessionId = sessionId;
@@ -1083,6 +1088,14 @@ export class Office {
     let rec = this.agents.get(id);
     for (let i = 0; rec?.info.kind === 'sub' && i < 16; i++) rec = rec.info.parentId ? this.agents.get(rec.info.parentId) : undefined;
     return rec?.info.kind === 'main' ? rec : undefined;
+  }
+
+  /** Nome do OpenBot do agente; um segundo agente com o mesmo nome (outra sessão dele) vira "nome 2", "nome 3"... */
+  private openbotPerson(o: { agentId: string; name: string }): { name: string; look: 'f' | 'm' } {
+    const used = new Set([...this.agents.values()].map((r) => r.info.name));
+    let name = o.name;
+    for (let n = 2; used.has(name); n++) name = `${o.name} ${n}`;
+    return { name, look: hash32(o.agentId) % 2 ? 'm' : 'f' };
   }
 
   /** Leva o principal e os subagentes dele para a sala. */
