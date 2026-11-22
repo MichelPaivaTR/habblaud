@@ -2,7 +2,7 @@
 // tailnet; toda escrita segue em 403 e nunca chega ao serviço. Os stubs de escrita provam que a rota não é chamada.
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AccountsService } from '../accounts/service';
@@ -18,6 +18,7 @@ import { Hub } from './sse';
 setQuiet(true);
 
 const TAILNET = '100.81.240.92:4747';
+const cleanups: Array<() => void> = [];
 
 interface Server {
   port: number;
@@ -156,6 +157,45 @@ describe('modo de visualização (HABBLAUD_VIEW_REMOTE) pela tailnet', () => {
   it('histórico: conta desconhecida → 404 e id inválido (com ../) → 400, sem ler arquivo', async () => {
     expect((await call(s.port, 'GET', '/api/sessions/nao-existe/7b0f1c2e-1111-4222-8333-444455556666/terminal')).status).toBe(404);
     expect((await call(s.port, 'GET', '/api/sessions/.claude/..%2F..%2Fetc/terminal')).status).toBe(400);
+  });
+});
+
+describe('histórico em modo de visualização: sessão real', () => {
+  const SID = '7b0f1c2e-1111-4222-8333-444455556666';
+  let s: Server;
+  let dir: string;
+  let attached: ReturnType<typeof vi.fn>;
+  beforeEach(async () => {
+    const tmp = tempDir();
+    dir = join(tmp.dir, 'conta');
+    mkdirSync(join(dir, 'projects', '-p-loja'), { recursive: true });
+    writeFileSync(join(dir, 'projects', '-p-loja', `${SID}.jsonl`), '{"type":"user","message":{"role":"user","content":"oi"}}\n');
+    attached = vi.fn((_req: http.IncomingMessage, res: http.ServerResponse) => {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.end('data: {}\n\n');
+    });
+    s = await serve({
+      view: true,
+      terminal: false,
+      terminals: { attach: streams.attach, attachSession: attached } as unknown as ApiDeps['terminals'],
+      sessions: new SessionHistory({ accounts: () => [{ id: 'conta', dir }], openAgentOf: () => undefined }),
+    });
+    cleanups.push(tmp.cleanup);
+  });
+  afterEach(async () => {
+    await s.close();
+    cleanups.splice(0).forEach((c) => c());
+  });
+
+  it('abre a conversa de uma sessão encerrada, só com o transcript da conta', async () => {
+    expect((await call(s.port, 'GET', `/api/sessions/conta/${SID}/terminal`)).status).toBe(200);
+    expect(attached).toHaveBeenCalledTimes(1);
+    expect(String(attached.mock.calls[0][3])).toContain(`${dir}/projects/-p-loja/${SID}.jsonl`);
+  });
+
+  it('a sessão que não existe na conta volta 404 sem abrir nada', async () => {
+    expect((await call(s.port, 'GET', '/api/sessions/conta/00000000-0000-4000-8000-000000000000/terminal')).status).toBe(404);
+    expect(attached).not.toHaveBeenCalled();
   });
 });
 
