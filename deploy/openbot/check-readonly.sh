@@ -3,6 +3,7 @@
 # Leitura (terminal, histórico, snapshot) tem de responder 200; escrita, entregas e edição 403; World 404.
 # Uso: check-readonly.sh [host=100.81.240.92] [porta=4747] [pid do serviço] [log=/data/.habblaud/logs/habblaud.log]
 #      [pasta do Claude=/data/.claude] [linha de base=/data/.habblaud/claude-baseline.txt]
+# Conexões de saída: SAMPLES amostras (padrão 5) com INTERVAL segundos entre elas (padrão 2); vale a pior amostra.
 set -u
 
 HOST="${1:-100.81.240.92}"
@@ -86,13 +87,20 @@ if [ -z "$PID" ] || [ ! -d "/proc/$PID" ]; then
   fail "PID do serviço não informado ou não está rodando"
 else
   port_hex=$(printf '%04X' "$PORT")
-  inodes=$(for fd in /proc/"$PID"/fd/*; do readlink "$fd" 2>/dev/null; done | sed -n 's/^socket:\[\([0-9]*\)\]$/\1/p')
-  out=$(printf '%s\n' $inodes | awk -v port="$port_hex" '
-    NR == FNR { owned[$1] = 1; next }
-    FNR > 1 && $4 == "01" { split($2, local, ":"); if (($10 in owned) && local[2] != port) n++ }
-    END { print n + 0 }
-  ' - /proc/net/tcp /proc/net/tcp6)
-  if [ "$out" = 0 ]; then ok "sem conexão de saída do PID $PID"; else fail "$out conexão(ões) de saída do PID $PID"; fi
+  samples="${SAMPLES:-5}"
+  interval="${INTERVAL:-2}"
+  out=0
+  for ((i = 0; i < samples; i++)); do
+    inodes=$(for fd in /proc/"$PID"/fd/*; do readlink "$fd" 2>/dev/null; done | sed -n 's/^socket:\[\([0-9]*\)\]$/\1/p')
+    n=$(printf '%s\n' $inodes | awk -v port="$port_hex" '
+      NR == FNR { owned[$1] = 1; next }
+      FNR > 1 && $4 == "01" { split($2, local, ":"); if (($10 in owned) && local[2] != port) n++ }
+      END { print n + 0 }
+    ' - /proc/net/tcp /proc/net/tcp6)
+    [ "$n" -gt "$out" ] && out=$n
+    [ "$i" -lt $((samples - 1)) ] && sleep "$interval"
+  done
+  if [ "$out" = 0 ]; then ok "sem conexão de saída do PID $PID ($samples amostras)"; else fail "$out conexão(ões) de saída do PID $PID em alguma das $samples amostras"; fi
 
   # Endereço de escuta: o socket LISTEN da porta, do PID do serviço, tem de estar no IP informado (não em 0.0.0.0 nem ::).
   # /proc guarda o IPv4 em hexadecimal little-endian (100.81.240.92 aparece como 5CF05164).
