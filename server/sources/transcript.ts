@@ -48,6 +48,11 @@ export function applyTaskOp(tasks: TaskItem[], op: TaskOp): TaskItem[] {
   }
 }
 
+/** Mascara segredos e só então corta (cortar antes deixaria o prefixo do segredo passar). */
+function maskCut(s: string, n: number): string {
+  return truncate(maskSecrets(s), n);
+}
+
 function todosToTasks(raw: unknown): TaskItem[] {
   if (!Array.isArray(raw)) return [];
   const out: TaskItem[] = [];
@@ -57,9 +62,9 @@ function todosToTasks(raw: unknown): TaskItem[] {
     const title = str(t.content) ?? str(t.subject) ?? str(t.title);
     if (!title) return;
     const status = typeof t.status === 'string' && TASK_STATUSES.has(t.status) ? (t.status as TaskStatus) : 'pending';
-    const task: TaskItem = { id: str(t.id) ?? String(i + 1), title: truncate(title, 120), status };
+    const task: TaskItem = { id: str(t.id) ?? String(i + 1), title: maskCut(title, 120), status };
     const af = str(t.activeForm);
-    if (af) task.activeForm = truncate(af, 120);
+    if (af) task.activeForm = maskCut(af, 120);
     out.push(task);
   });
   return out;
@@ -370,7 +375,8 @@ class LineParser {
   }
 
   private meta(key: 'customTitle' | 'agentName' | 'aiTitle' | 'lastPrompt' | 'permissionMode', v: unknown): void {
-    const value = str(v)?.trim();
+    const raw = str(v)?.trim();
+    const value = raw ? maskSecrets(raw) : raw;
     if (!value || this.s[key] === value) return;
     this.s[key] = value;
     this.changed();
@@ -479,9 +485,9 @@ class LineParser {
         const description = str(input.description);
         const subagentType = str(input.subagent_type);
         const agentName = str(input.name);
-        if (description) spawn.description = description;
-        if (subagentType) spawn.subagentType = subagentType;
-        if (agentName) spawn.name = agentName;
+        if (description) spawn.description = maskSecrets(description);
+        if (subagentType) spawn.subagentType = maskSecrets(subagentType);
+        if (agentName) spawn.name = maskSecrets(agentName);
         this.out.signals.push({ type: 'spawn', spawn });
         break;
       }
@@ -494,7 +500,7 @@ class LineParser {
         const tid = `pending:${id}`;
         remember(s.pendingTaskCreates, id, tid, 64);
         const af = str(input.activeForm);
-        this.taskOp(af ? { op: 'create', id: tid, title: truncate(title, 120), activeForm: truncate(af, 120) } : { op: 'create', id: tid, title: truncate(title, 120) });
+        this.taskOp(af ? { op: 'create', id: tid, title: maskCut(title, 120), activeForm: maskCut(af, 120) } : { op: 'create', id: tid, title: maskCut(title, 120) });
         break;
       }
       case 'TaskUpdate': {
@@ -504,9 +510,9 @@ class LineParser {
         const op: TaskOp = { op: 'update', id: tid };
         if (status) op.status = status;
         const title = str(input.subject);
-        if (title) op.title = truncate(title, 120);
+        if (title) op.title = maskCut(title, 120);
         const af = str(input.activeForm);
-        if (af) op.activeForm = truncate(af, 120);
+        if (af) op.activeForm = maskCut(af, 120);
         this.taskOp(op);
         break;
       }
@@ -736,7 +742,7 @@ export function parseLine(state: TranscriptState, raw: string, ctx: ParseContext
 /** Título exibido: custom-title > agent-name > ai-title > último prompt (truncado). */
 export function titleOf(state: TranscriptState): string | undefined {
   const t = state.customTitle ?? state.agentName ?? state.aiTitle ?? state.lastPrompt;
-  return t ? truncate(t, 90) : undefined;
+  return t ? truncate(maskSecrets(t), 90) : undefined;
 }
 
 // ------------------------------------------------------------------ prefixo do arquivo

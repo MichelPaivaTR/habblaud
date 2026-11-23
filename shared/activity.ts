@@ -128,6 +128,31 @@ export function maskSecrets(s: string): string {
   return out;
 }
 
+/**
+ * maskSecrets em todas as strings de um valor JSON (chaves ficam). Devolve o próprio objeto quando nada muda, então é
+ * barato e idempotente. Rede de segurança do modo de visualização: cobre campos que a fonte não mascarou.
+ */
+export function maskDeep<T>(value: T): T {
+  if (typeof value === 'string') return maskSecrets(value) as T;
+  if (Array.isArray(value)) {
+    let out: unknown[] | undefined;
+    value.forEach((v, i) => {
+      const m = maskDeep(v);
+      if (m !== v) (out ??= value.slice())[i] = m;
+    });
+    return (out ?? value) as T;
+  }
+  if (value && typeof value === 'object') {
+    let out: Record<string, unknown> | undefined;
+    for (const [k, v] of Object.entries(value)) {
+      const m = maskDeep(v);
+      if (m !== v) (out ??= { ...(value as Record<string, unknown>) })[k] = m;
+    }
+    return (out ?? value) as T;
+  }
+  return value;
+}
+
 // ------------------------------------------------------------------ shell
 
 /**
@@ -771,7 +796,9 @@ export function describeTool(name: string, rawInput: unknown): ActivityDescripti
 
 /** Atividade para um prompt do usuário. */
 export function describePrompt(text: string): ActivityDescription {
-  return make('prompt', '📨', tr('Nova tarefa: “{0}”', [truncate(text, 30)]), text);
+  // Mascara antes de cortar: o corte no meio de um segredo deixaria o prefixo passar (abaixo de 16 caracteres o padrão não casa).
+  const masked = maskSecrets(text);
+  return make('prompt', '📨', tr('Nova tarefa: “{0}”', [truncate(masked, 30)]), masked);
 }
 
 export function formatDuration(ms: number): string {

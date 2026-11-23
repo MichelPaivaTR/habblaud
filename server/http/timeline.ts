@@ -6,10 +6,11 @@
 // texto vindo da URL (nada de "..", barras ou bytes estranhos).
 import { createReadStream, statSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { pipeline } from 'node:stream';
+import { pipeline, Transform } from 'node:stream';
 import { createGzip } from 'node:zlib';
 import { listTimelineDays, timelineFile } from '../history/timeline';
-import { sendJson } from './app';
+import { maskDeep } from '../../shared/activity';
+import { isViewResponse, sendJson } from './app';
 import { tr } from '../../shared/i18n';
 
 const DAYS_PATH = '/api/timeline/days';
@@ -65,6 +66,8 @@ export function createTimelineHandler(opts: TimelineRoutesOptions): (req: Incomi
 
 /** Transmite o arquivo até o tamanho visto agora (o resto, ainda sendo gravado, fica para a próxima). */
 function sendDay(req: IncomingMessage, res: ServerResponse, file: string, size: number, head: boolean): void {
+  // Modo de visualização: o arquivo já gravado pode ter segredo (de antes da máscara na fonte); cada linha passa por maskDeep.
+  const mask = isViewResponse(res);
   const gzip = /\bgzip\b/i.test(String(req.headers['accept-encoding'] ?? ''));
   const headers: Record<string, string | number> = {
     'Content-Type': 'application/x-ndjson; charset=utf-8',
@@ -74,7 +77,7 @@ function sendDay(req: IncomingMessage, res: ServerResponse, file: string, size: 
     Vary: 'Accept-Encoding',
   };
   if (gzip) headers['Content-Encoding'] = 'gzip';
-  else headers['Content-Length'] = size;
+  else if (!mask) headers['Content-Length'] = size;
   res.writeHead(200, headers);
   if (head || size === 0) {
     if (gzip && !head) createGzip().end().pipe(res);
@@ -85,6 +88,29 @@ function sendDay(req: IncomingMessage, res: ServerResponse, file: string, size: 
   const done = (err: NodeJS.ErrnoException | null) => {
     if (err && !res.writableEnded) res.destroy();
   };
-  if (gzip) pipeline(src, createGzip(), res, done);
-  else pipeline(src, res, done);
+  const stages = [...(mask ? [maskLines()] : []), ...(gzip ? [createGzip()] : [])];
+  pipeline([src, ...stages, res], done);
+}
+
+/** Aplica maskDeep a cada linha JSON; linha que não é JSON válido é descartada (não dá para garantir que não vaza). */
+function maskLines(): Transform {
+  let rest = '';
+  const one = (line: string): string => {
+    if (!line.trim()) return '';
+    try {
+      return `${JSON.stringify(maskDeep(JSON.parse(line)))}\n`;
+    } catch {
+      return '';
+    }
+  };
+  return new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      const lines = (rest + chunk.toString('utf8')).split('\n');
+      rest = lines.pop() ?? '';
+      cb(null, lines.map(one).join(''));
+    },
+    flush(cb) {
+      cb(null, one(rest));
+    },
+  });
 }

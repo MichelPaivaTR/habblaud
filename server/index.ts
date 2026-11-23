@@ -151,6 +151,7 @@ late.office = office;
 late.agents = agents;
 // Página que pode responder pelo escritório: Host local na porta local; na remota, só com permissions liberado.
 const hub = new Hub(office, {
+  mask: config.view,
   canAnswer: (req) => (isRemoteRequest(req) ? !!config.remote?.allow.has('permissions') : isLoopbackHost(req.headers.host)),
 });
 // "Meu dia": amostra o escritório a cada segundo e persiste em <dataDir>/stats/ (ver history/daystats.ts).

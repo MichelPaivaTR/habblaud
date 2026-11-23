@@ -1,5 +1,6 @@
 // Rotas da API (/api/*). Respostas JSON; rotas desconhecidas -> 404 JSON.
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { maskDeep } from '../../shared/activity';
 import { NAME_MAX, parseAppearanceParts, parseCharacterName, parseSeed } from '../../shared/appearance';
 import type { AccessInfo, AgentInfo, ModSummary, OfficeSnapshot, SourceInfo, UpdateStatus } from '../../shared/types';
 import type { AccountsService } from '../accounts/service';
@@ -156,8 +157,15 @@ export class HttpError extends Error {
   }
 }
 
+/** Respostas do modo de visualização (deps.view): tudo que sai pela rede passa por maskDeep (ver sendJson e o timeline). */
+const viewResponses = new WeakSet<ServerResponse>();
+
+export function isViewResponse(res: ServerResponse): boolean {
+  return viewResponses.has(res);
+}
+
 export function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  const data = JSON.stringify(body);
+  const data = JSON.stringify(viewResponses.has(res) ? maskDeep(body) : body);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(data),
@@ -339,6 +347,8 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
     if (path !== '/api' && !path.startsWith('/api/')) return false;
     const method = req.method ?? 'GET';
     const isRead = method === 'GET' || method === 'HEAD';
+    // Modo de visualização: rede de segurança sobre a máscara da fonte (campos novos e dados já gravados).
+    if (deps.view) viewResponses.add(res);
 
     if (isRemote(req) && isLocalOnlyPath(path)) {
       req.resume();

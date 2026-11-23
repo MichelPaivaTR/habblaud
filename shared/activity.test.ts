@@ -6,6 +6,7 @@ import {
   describeTool,
   describeWaitingFor,
   looksPortuguese,
+  maskDeep,
   maskSecrets,
   shellWords,
   SPECIAL,
@@ -267,5 +268,31 @@ describe('maskSecrets: formatos de segredo que não podem aparecer no terminal e
 
   it('texto comum e comandos sem segredo ficam como estão', () => {
     expect(maskSecrets('npm test && git status')).toBe('npm test && git status');
+  });
+});
+
+describe('maskDeep e describePrompt (A1)', () => {
+  const GH = 'ghp_0123456789abcdefghijklmnopqrstuvwxyzAB';
+
+  it('mascara todas as strings, preserva chaves, números e a identidade do que não muda', () => {
+    const plain = { a: 'texto comum', n: 3, ok: true, nada: null, lista: ['x', { y: 'z' }] };
+    expect(maskDeep(plain)).toBe(plain);
+    const out = maskDeep({ title: `usa ${GH}`, tasks: [{ title: 'ok', activeForm: `GITHUB_TOKEN=${GH}` }], n: 1 });
+    expect(JSON.stringify(out)).not.toContain(GH.slice(0, 20));
+    expect(out.n).toBe(1);
+    expect(out.tasks[0].title).toBe('ok');
+  });
+
+  it('é idempotente e não altera o original', () => {
+    const src = { t: `x ${GH}` };
+    const once = maskDeep(src);
+    expect(maskDeep(once)).toEqual(once);
+    expect(src.t).toContain(GH);
+  });
+
+  it('describePrompt mascara antes de cortar: nem o prefixo do segredo passa', () => {
+    const a = describePrompt(`Use ${GH} agora`);
+    expect(JSON.stringify(a)).not.toContain('ghp_0123');
+    expect(a.text).toContain('gh*_***');
   });
 });

@@ -169,6 +169,28 @@ describe('parseLine — títulos, tarefas e números', () => {
     expect(s2.tasks).toEqual([{ id: '7', title: 'Escrever testes', status: 'in_progress', activeForm: 'Escrevendo testes' }]);
   });
 
+  it('segredos mascarados na fonte: títulos, tarefas, subagente e prompt (A1)', () => {
+    const GH = 'ghp_0123456789abcdefghijklmnopqrstuvwxyzAB';
+    const SK = 'sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUV';
+    const s = createTranscriptState();
+    const r = feed(s, [
+      L.prompt(`Use ${GH} no deploy`, { at: T0 }),
+      L.raw('custom-title', { customTitle: `Deploy ${GH}` }),
+      L.raw('ai-title', { aiTitle: `Deploy ${SK}` }),
+      L.assistant([
+        L.tool('t1', 'TodoWrite', { todos: [{ content: `Rodar com ${GH}`, status: 'in_progress', activeForm: `Rodando com ${SK}` }] }),
+        L.tool('c1', 'TaskCreate', { subject: `Criar ${GH}`, activeForm: `Criando ${SK}` }),
+        L.tool('a1', 'Agent', { description: `Usa ${GH}`, subagent_type: 'general-purpose', prompt: 'x' }),
+      ]),
+      L.assistant([L.tool('u1', 'TaskUpdate', { taskId: 'c1', subject: `Mudar ${SK}`, activeForm: `Mudando ${GH}` })]),
+    ]);
+    const all = JSON.stringify({ s, r });
+    expect(all).not.toContain(GH.slice(0, 16));
+    expect(all).not.toContain(SK.slice(0, 16));
+    expect(titleOf(s)).toBe('Deploy gh*_***');
+    expect(s.tasks.map((t) => t.title)).toContain('Rodar com gh*_***');
+  });
+
   it('tokens: linhas da mesma mensagem contam uma vez (com o uso final)', () => {
     const s = createTranscriptState();
     feed(s, [
