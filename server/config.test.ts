@@ -110,4 +110,30 @@ describe('loadConfig: modo de visualização', () => {
   it('flag com host fora da tailnet: view falso (fail-closed)', () => {
     expect(loadConfig({ HOME: tmp.dir, HABBLAUD_HOST: '0.0.0.0', HABBLAUD_VIEW_REMOTE: '1' }, []).view).toBe(false);
   });
+
+  it('view força tudo desligado, mesmo com o ambiente pedindo o contrário (A2)', () => {
+    // Docker com a porta publicada só no loopback do host: o terminal e as mensagens voltariam a valer.
+    const env = { HOME: tmp.dir, HABBLAUD_IN_DOCKER: '1', HABBLAUD_BIND: '127.0.0.1', HABBLAUD_HOST: '100.81.240.92', HABBLAUD_VIEW_REMOTE: '1' };
+    const cfg = loadConfig(env, []);
+    expect(cfg.view).toBe(true);
+    expect(cfg.terminal).toBe(false);
+    expect(cfg.messages).toBe(false);
+    expect(cfg.world.enabled).toBe(false);
+    expect(cfg.updateCheck).toBe(false);
+    expect(cfg.codex).toBe(false);
+    expect(cfg.viewForcedOff).toEqual(['terminal', 'mensagens', 'World', 'verificação de atualização', 'Codex']);
+  });
+
+  it('view sem as variáveis de produção: World, atualização e Codex desligados à força', () => {
+    const cfg = loadConfig({ HOME: tmp.dir, HABBLAUD_IN_DOCKER: '0', HABBLAUD_HOST: '100.81.240.92', HABBLAUD_VIEW_REMOTE: '1' }, []);
+    expect(cfg).toMatchObject({ view: true, terminal: false, messages: false, updateCheck: false, codex: false });
+    expect(cfg.world.enabled).toBe(false);
+    expect(cfg.viewForcedOff).toEqual(['World', 'verificação de atualização', 'Codex']);
+  });
+
+  it('sem view, nada é forçado: a configuração segue o ambiente', () => {
+    const cfg = loadConfig({ HOME: tmp.dir, HABBLAUD_IN_DOCKER: '0' }, []);
+    expect(cfg).toMatchObject({ view: false, terminal: true, messages: true, updateCheck: true, codex: true, viewForcedOff: [] });
+    expect(cfg.world.enabled).toBe(true);
+  });
 });

@@ -1585,6 +1585,7 @@ export const FR: Readonly<Record<string, string>> = {
   "   Terminal: ligado (acesso só local).": "   Terminal : activé (accès local uniquement).",
   "   Terminal: somente leitura pela tailnet (HABBLAUD_VIEW_REMOTE).": "   Terminal : lecture seule via le tailnet (HABBLAUD_VIEW_REMOTE).",
   "   Visualização pela tailnet desligada: {0}.": "   Affichage par le tailnet désactivé : {0}.",
+  "   Modo de visualização: o ambiente pedia {0}, desligado à força (a visualização pela tailnet é só leitura e sem rede para fora).": "   Mode d'affichage : l'environnement demandait {0} ; désactivé de force (l'affichage par le tailnet est en lecture seule et sans réseau sortant).",
   "HABBLAUD_VIEW_REMOTE pede um IP da tailnet em HABBLAUD_HOST (estava {0})": "HABBLAUD_VIEW_REMOTE demande une IP du tailnet dans HABBLAUD_HOST (elle était {0})",
   "somente leitura pela tailnet (HABBLAUD_VIEW_REMOTE)": "lecture seule via le tailnet (HABBLAUD_VIEW_REMOTE)",
   "   Terminal: desligado ({0}).": "   Terminal : désactivé ({0}).",

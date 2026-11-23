@@ -504,6 +504,7 @@ server.listen(config.port, config.host, () => {
   if (config.terminal) log.info(tr('   Terminal: ligado (acesso só local).'));
   else if (config.view) log.info(tr('   Terminal: somente leitura pela tailnet (HABBLAUD_VIEW_REMOTE).'));
   else log.info(tr('   Terminal: desligado ({0}).', [terminalOffReason(process.env, config.host, config.inDocker)]));
+  if (config.viewForcedOff.length) log.warn(tr('   Modo de visualização: o ambiente pedia {0}, desligado à força (a visualização pela tailnet é só leitura e sem rede para fora).', [config.viewForcedOff.join(', ')]));
   const viewWhy = viewOffReason(process.env, config.host);
   if (viewWhy) log.warn(tr('   Visualização pela tailnet desligada: {0}.', [viewWhy]));
   log.info(ptys ? tr('   Terminal interativo: ligado ({0}).', [claudeBin]) : tr('   Terminal interativo: {0}.', [ptyOff ?? tr('desligado')]));

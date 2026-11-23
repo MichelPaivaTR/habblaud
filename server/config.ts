@@ -46,6 +46,8 @@ export interface ServerConfig {
    * do terminal, do histórico de sessões e das mensagens (o filtro "Só prompts"); tudo que escreve segue em 403.
    */
   view: boolean;
+  /** Recursos que o ambiente pedia ligados e o modo de visualização forçou desligados (vai para o log ao iniciar). */
+  viewForcedOff: string[];
   /** Grava a linha do tempo do escritório para o timelapse (<dataDir>/timeline); HABBLAUD_TIMELINE=0 desliga. */
   timeline: boolean;
   /** Raízes dos repositórios (HABBLAUD_REPO_ROOTS, separadas por vírgula): com elas, a sala é o repositório. Vazia = sala pela pasta. */
@@ -270,6 +272,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, argv: string[] 
   const host = env.HABBLAUD_HOST?.trim() || '127.0.0.1';
   const pkg = readPackage(rootDir);
   const remote = parseRemoteConfig(env, inDocker);
+  const view = !viewOffReason(env, host) && isTruthy(env.HABBLAUD_VIEW_REMOTE);
+  const wanted = {
+    terminal: terminalOffReason(env, host, inDocker) === undefined,
+    messages: messagesOffReason(env, host, inDocker) === undefined,
+    world: parseWorldConfig(env, argv),
+    updateCheck: !env.HABBLAUD_UPDATE_CHECK?.trim() || isTruthy(env.HABBLAUD_UPDATE_CHECK),
+    codex: !env.HABBLAUD_CODEX?.trim() || isTruthy(env.HABBLAUD_CODEX),
+  };
+  // Modo de visualização é só leitura e sem rede para fora: o que o ambiente pedir de diferente (ex.: HABBLAUD_IN_DOCKER=1 com
+  // HABBLAUD_BIND=127.0.0.1 libera o terminal numa porta exposta) é ignorado, e o log diz o que foi forçado.
+  const viewForcedOff = view
+    ? ([
+        wanted.terminal && 'terminal',
+        wanted.messages && 'mensagens',
+        wanted.world.enabled && 'World',
+        wanted.updateCheck && 'verificação de atualização',
+        wanted.codex && 'Codex',
+      ].filter(Boolean) as string[])
+    : [];
   return {
     port: Number.isFinite(port) && port > 0 && port < 65536 ? port : 4747,
     host,
@@ -281,19 +302,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, argv: string[] 
     dataDir: resolve(env.HABBLAUD_DATA_DIR?.trim() || (inDocker ? '/data' : join(home, '.habblaud'))),
     usageDir: resolve(env.HABBLAUD_USAGE_DIR?.trim() || join(home, '.habblaud', 'usage')),
     allowedHosts: parseAllowedHosts(env.HABBLAUD_ALLOWED_HOSTS),
-    terminal: terminalOffReason(env, host, inDocker) === undefined,
-    messages: messagesOffReason(env, host, inDocker) === undefined,
-    view: !viewOffReason(env, host) && isTruthy(env.HABBLAUD_VIEW_REMOTE),
+    terminal: wanted.terminal && !view,
+    messages: wanted.messages && !view,
+    view,
+    viewForcedOff,
     timeline: !env.HABBLAUD_TIMELINE?.trim() || isTruthy(env.HABBLAUD_TIMELINE),
     repoRoots: parseRepoRoots(env.HABBLAUD_REPO_ROOTS),
     agentNamesFile: env.HABBLAUD_AGENT_NAMES_FILE?.trim() || undefined,
     rootDir,
     version: pkg.version,
     repo: pkg.repo,
-    updateCheck: !env.HABBLAUD_UPDATE_CHECK?.trim() || isTruthy(env.HABBLAUD_UPDATE_CHECK),
-    codex: !env.HABBLAUD_CODEX?.trim() || isTruthy(env.HABBLAUD_CODEX),
+    updateCheck: wanted.updateCheck && !view,
+    codex: wanted.codex && !view,
     remote: remote.config,
     remoteWarning: remote.warning,
-    world: parseWorldConfig(env, argv),
+    world: view ? { ...wanted.world, enabled: false } : wanted.world,
   };
 }
