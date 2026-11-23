@@ -841,6 +841,24 @@ describe('Office: sala por repositório', () => {
     expect(rooms()).toEqual([REPO_A]);
   });
 
+  it('chegada e mudança de sala no mesmo ciclo dão um aviso só, na sala certa (B7)', () => {
+    const { office, main, now } = setup();
+    main('acc:1');
+    office.setRepo('acc:1', REPO_A, now());
+    const texts = office.commit().notices.map((n) => n.text);
+    expect(texts.filter((t) => t.startsWith('👋'))).toHaveLength(1);
+    expect(texts.some((t) => t.startsWith('🚚'))).toBe(false);
+    expect(texts.find((t) => t.startsWith('👋'))).toContain(REPO_A.split('/').pop() as string);
+  });
+
+  it('mudança de sala depois do aviso de chegada ter saído continua avisando "foi para" (B7)', () => {
+    const { office, main, now } = setup();
+    main('acc:1');
+    office.commit();
+    office.setRepo('acc:1', REPO_A, now());
+    expect(office.commit().notices.map((n) => n.text).some((t) => t.startsWith('🚚'))).toBe(true);
+  });
+
   it('dois agentes no mesmo repositório ficam na mesma sala', () => {
     const { office, main, rooms, now } = setup();
     main('acc:1');

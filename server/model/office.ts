@@ -134,6 +134,8 @@ interface AgentRecord {
   removeAt?: number;
   /** Última evidência de repositório do principal (sala = repositório) e o instante dela. */
   repo?: { room: string; at: number };
+  /** Aviso "chegou" deste agente (para o B7: se ainda não saiu, a mudança de sala o reescreve em vez de duplicar). */
+  arrival?: { notice: Notice; account: string };
   /** Nome vindo do OpenBot: não passa pelo NameStore (nada de names.json). */
   fixedName?: boolean;
   /** Nome-base do OpenBot (sem o sufixo de duplicata); ver renameOpenbot. */
@@ -383,7 +385,10 @@ export class Office {
     if (p.status === 'working') rec.turnStart = now;
     this.agents.set(p.id, rec);
     const acc = this.deps.accountName(p.account);
+    const before = this.pendingNotices.length;
     this.notice('arrive', p.id, 'info', tr('👋 {0} chegou em {1}{2}', [info.name, this.roomName(roomId), acc ? ` (${acc})` : '']), roomId);
+    const arrived = this.pendingNotices.length > before ? this.pendingNotices[this.pendingNotices.length - 1] : undefined;
+    if (arrived) rec.arrival = { notice: arrived, account: acc ? ` (${acc})` : '' };
     this.markDirty();
   }
 
@@ -1135,7 +1140,15 @@ export class Office {
     this.ensureRoom(roomId, this.now());
     rec.info.roomId = roomId;
     for (const sub of this.descendants(mainId)) sub.info.roomId = roomId;
-    this.notice('room', mainId, 'info', tr('🚚 {0} foi para {1}', [rec.info.name, this.roomName(roomId)]), roomId);
+    const arrival = rec.arrival;
+    delete rec.arrival;
+    if (arrival && this.pendingNotices.includes(arrival.notice)) {
+      // Sessão nova que já nasce com evidência de repositório (mesmo ciclo): um aviso só, na sala certa (B7).
+      arrival.notice.text = tr('👋 {0} chegou em {1}{2}', [rec.info.name, this.roomName(roomId), arrival.account]);
+      arrival.notice.roomId = roomId;
+    } else {
+      this.notice('room', mainId, 'info', tr('🚚 {0} foi para {1}', [rec.info.name, this.roomName(roomId)]), roomId);
+    }
     this.dropRoomIfEmpty(from);
     this.markDirty();
   }
