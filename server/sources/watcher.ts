@@ -59,6 +59,8 @@ export interface WatcherOptions {
   watch?: boolean;
   /** Raízes dos repositórios (HABBLAUD_REPO_ROOTS): as chamadas de ferramenta viram sinais repoHint. */
   repoRoots?: string[];
+  /** H11: dono/repo -> sala pelo origin dos clones (GithubRepos.lookup). */
+  githubRepos?: (ownerRepo: string) => string | undefined;
   /** Nomes dos agentes do OpenBot (HABBLAUD_AGENT_NAMES_FILE); ausente = nomes sorteados. */
   agentNames?: AgentNames;
 }
@@ -523,7 +525,7 @@ export class ClaudeWatcher implements AgentSource {
    * (no lugar certo do feed) em vez de um "Fazendo uma pergunta" atrasado.
    */
   private applyMainLines(t: SessionTracker, lines: string[], live: boolean): void {
-    const results = lines.map((line) => parseWatchedLine(t.state, line, { idPrefix: t.key, now: this.now(), repoRoots: this.opts.repoRoots }));
+    const results = lines.map((line) => parseWatchedLine(t.state, line, { idPrefix: t.key, now: this.now(), repoRoots: this.opts.repoRoots, githubRepos: this.opts.githubRepos }));
     for (const r of results) {
       for (const a of r.activities) {
         if (a.activity.kind === 'ask' && a.toolUseId && !t.state.pendingTools.has(a.toolUseId)) {
@@ -762,7 +764,7 @@ export class ClaudeWatcher implements AgentSource {
     const results: LineResult[] = [];
     for (let i = 0; i < 64; i++) {
       const r = tail.read();
-      for (const line of r.lines) results.push(parseWatchedLine(state, line, { idPrefix: id, now, repoRoots: this.opts.repoRoots }));
+      for (const line of r.lines) results.push(parseWatchedLine(state, line, { idPrefix: id, now, repoRoots: this.opts.repoRoots, githubRepos: this.opts.githubRepos }));
       if (!r.more) break;
     }
     const finished =
@@ -831,7 +833,7 @@ export class ClaudeWatcher implements AgentSource {
           break;
         }
         for (const line of r.lines) {
-          const res = parseWatchedLine(sub.state, line, { idPrefix: sub.id, now, repoRoots: this.opts.repoRoots });
+          const res = parseWatchedLine(sub.state, line, { idPrefix: sub.id, now, repoRoots: this.opts.repoRoots, githubRepos: this.opts.githubRepos });
           fresh += res.activities.length;
           this.applyResult(t, sub.id, res, true);
         }

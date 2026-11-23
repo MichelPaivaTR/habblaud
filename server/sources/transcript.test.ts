@@ -1,7 +1,8 @@
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { log } from '../log';
+import { GithubRepos } from '../model/github-repos';
 import { L, tempDir } from '../test/fixtures';
 import { FileTail, MAX_LINE_BYTES } from './tail';
 import {
@@ -512,6 +513,23 @@ describe('parseLine — sinal repoHint', () => {
     const sem = one(L.assistant([L.tool('e2', 'Agent', { description: 'x', prompt: `${REPO}/a` })]));
     expect(fora.signals.some((s) => s.type === 'repoHint')).toBe(false);
     expect(sem.signals.some((s) => s.type === 'repoHint')).toBe(false);
+  });
+
+  it('caso real da H11: só gh api repos/dono/repo, pasta do agente como cwd, cai na sala do clone', () => {
+    const tmp = tempDir('habblaud-h11-');
+    try {
+      mkdirSync(join(tmp.dir, 'fiscal-natural-uso', '.git'), { recursive: true });
+      writeFileSync(join(tmp.dir, 'fiscal-natural-uso', '.git', 'config'), '[remote "origin"]\n\turl = https://github.com/michelcpaiva-personal/fiscal-natural-uso.git\n');
+      const repos = new GithubRepos([tmp.dir]);
+      const line = L.assistant([L.tool('g1', 'Bash', { command: 'gh api repos/michelcpaiva-personal/fiscal-natural-uso/issues?state=open' })], { at: T0 });
+      const r = parseLine(createTranscriptState(), line, { idPrefix: 'a', now: T0, repoRoots: [tmp.dir], githubRepos: (k) => repos.lookup(k) });
+      expect(r.signals).toContainEqual({ type: 'repoHint', repo: `${tmp.dir}/fiscal-natural-uso`, at: T0 });
+      // Sem o resolvedor (sem as raízes do GitHub) segue em "Sem repositório".
+      const sem = parseLine(createTranscriptState(), line, { idPrefix: 'a', now: T0, repoRoots: [tmp.dir] });
+      expect(sem.signals.some((x) => x.type === 'repoHint')).toBe(false);
+    } finally {
+      tmp.cleanup();
+    }
   });
 
   it('Bash com cd emite repoHint', () => {

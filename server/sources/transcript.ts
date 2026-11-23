@@ -8,7 +8,7 @@ import { describePrompt, describeShellJob, describeTool, maskSecrets, SPECIAL, t
 import type { GitHubEvent } from '../../shared/github';
 import { detectGitHubNotification, detectGitHubResult, githubCallOf, type GitHubCall } from './github';
 import type { ShellStart } from './shells';
-import { repoHintFromTool } from '../model/repo-room';
+import { repoHintFromTool, type GithubRoomResolver } from '../model/repo-room';
 import { LineBuffer, warnOversizedLine } from './tail';
 
 // ------------------------------------------------------------------ tarefas
@@ -190,6 +190,8 @@ export interface ParseContext {
   activities?: boolean;
   /** Raízes dos repositórios (HABBLAUD_REPO_ROOTS): sem elas não há sinal repoHint. */
   repoRoots?: string[];
+  /** H11: dono/repo -> sala, pelo origin dos clones nas raízes (GithubRepos); só desempata quando o comando não tem caminho local. */
+  githubRepos?: GithubRoomResolver;
 }
 
 export interface LineResult {
@@ -473,7 +475,7 @@ class LineParser {
     this.push(describeTool(name, input), { suffix, tool: name, toolUseId: id, msgId });
     const gh = githubCallOf(name, input);
     if (gh) remember(s.github, id, gh, 64);
-    const repo = repoHintFromTool(name, input, this.ctx.repoRoots ?? []);
+    const repo = repoHintFromTool(name, input, this.ctx.repoRoots ?? [], this.ctx.githubRepos);
     if (repo) this.out.signals.push({ type: 'repoHint', repo, at: this.at });
 
     switch (name) {

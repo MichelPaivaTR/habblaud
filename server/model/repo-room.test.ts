@@ -87,3 +87,38 @@ describe('repoHintFromTool', () => {
     expect(repoHintFromTool('Bash', { command: `cd ${REPO}` }, [])).toBeUndefined();
   });
 });
+
+describe('repoHintFromTool: repositório do GitHub (H11)', () => {
+  const FISCAL = '/data/OpenBot/Shared/Github/fiscal-natural-uso';
+  const github = (ref: string) => ({ 'michelcpaiva-personal/fiscal-natural-uso': FISCAL, 'o/habblaud': REPO })[ref];
+  const bash = (command: string) => repoHintFromTool('Bash', { command }, ROOTS, github);
+
+  it('os três formatos do CA11.1 caem na sala da pasta', () => {
+    expect(bash('gh issue list -R michelcpaiva-personal/fiscal-natural-uso --state open')).toBe(FISCAL);
+    expect(bash('gh issue list --repo michelcpaiva-personal/fiscal-natural-uso')).toBe(FISCAL);
+    expect(bash('gh api repos/michelcpaiva-personal/fiscal-natural-uso/issues --jq ".[].title"')).toBe(FISCAL);
+    expect(bash('gh api /repos/michelcpaiva-personal/fiscal-natural-uso/pulls')).toBe(FISCAL);
+    expect(bash('curl -s https://github.com/michelcpaiva-personal/fiscal-natural-uso/issues/3')).toBe(FISCAL);
+    expect(bash('git clone git@github.com:michelcpaiva-personal/fiscal-natural-uso.git /tmp/x')).toBe(FISCAL);
+    expect(bash('curl https://api.github.com/repos/michelcpaiva-personal/fiscal-natural-uso')).toBe(FISCAL);
+  });
+
+  it('sem clone local o repositório não vira sala (CA11.2)', () => {
+    expect(bash('gh api repos/outro/sem-clone/issues')).toBeUndefined();
+    expect(bash('gh issue list -R outro/sem-clone')).toBeUndefined();
+  });
+
+  it('caminho local vale primeiro; o GitHub só desempata sem caminho (CA11.3)', () => {
+    expect(bash(`cd ${REPO} && gh api repos/michelcpaiva-personal/fiscal-natural-uso/issues`)).toBe(REPO);
+  });
+
+  it('com várias referências, vale a primeira que tem clone', () => {
+    expect(bash('gh api repos/outro/sem-clone && gh issue list -R o/habblaud')).toBe(REPO);
+  });
+
+  it('sem o resolvedor ou fora do Bash, nada muda', () => {
+    expect(repoHintFromTool('Bash', { command: 'gh issue list -R michelcpaiva-personal/fiscal-natural-uso' }, ROOTS)).toBeUndefined();
+    expect(repoHintFromTool('Read', { file_path: '/tmp/x' }, ROOTS, github)).toBeUndefined();
+    expect(bash('ls -la')).toBeUndefined();
+  });
+});

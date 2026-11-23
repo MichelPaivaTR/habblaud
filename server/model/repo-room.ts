@@ -50,12 +50,48 @@ function repoInCommand(command: string, roots: string[]): string | undefined {
   return hits[0]?.room;
 }
 
-/** Evidência de repositório de uma chamada de ferramenta; undefined quando não há caminho de repositório. */
-export function repoHintFromTool(tool: string, input: unknown, roots: string[]): string | undefined {
+/** `dono/repo` → sala (pasta clonada cujo origin é esse repositório); ver GithubRepos. */
+export type GithubRoomResolver = (ownerRepo: string) => string | undefined;
+
+const NAME = '[\\w.-]+';
+// Referências do GitHub num comando: gh -R/--repo dono/repo, gh api repos/dono/repo, URL github.com/dono/repo (https ou ssh).
+const GITHUB_REFS = [
+  new RegExp(`(?:^|[\\s;&|(])(?:-R|--repo)(?:\\s+|=)["']?(${NAME}/${NAME})`, 'g'),
+  new RegExp(`(?:^|[\\s"'=/])repos/(${NAME}/${NAME})`, 'g'),
+  new RegExp(`github\\.com[/:](${NAME}/${NAME})`, 'gi'),
+];
+
+/**
+ * Repositório do GitHub citado no comando (primeiro, na ordem do comando, que tem clone nas raízes). Sem clone local o
+ * repositório não vira sala (CA11.2). `api.github.com/repos/o/r` entra pela forma `repos/o/r`, não pela URL.
+ */
+function githubRoomInCommand(command: string, resolve: GithubRoomResolver): string | undefined {
+  const hits: { index: number; ref: string }[] = [];
+  for (const re of GITHUB_REFS) {
+    for (const m of command.matchAll(re)) {
+      const ref = m[1].replace(/\.git$/, '');
+      if (re.source.startsWith('github') && /^repos\//.test(ref)) continue;
+      hits.push({ index: m.index ?? 0, ref });
+    }
+  }
+  hits.sort((a, b) => a.index - b.index);
+  for (const h of hits) {
+    const room = resolve(h.ref);
+    if (room) return room;
+  }
+  return undefined;
+}
+
+/**
+ * Evidência de repositório de uma chamada de ferramenta; undefined quando não há. Caminho local vale primeiro; só sem
+ * caminho um comando Bash com referência ao GitHub (`github`) desempata (H11).
+ */
+export function repoHintFromTool(tool: string, input: unknown, roots: string[], github?: GithubRoomResolver): string | undefined {
   if (!roots.length || !input || typeof input !== 'object') return undefined;
   const fields = input as Record<string, unknown>;
   if (tool === 'Bash') {
-    return typeof fields.command === 'string' ? repoInCommand(fields.command, roots) : undefined;
+    if (typeof fields.command !== 'string') return undefined;
+    return repoInCommand(fields.command, roots) ?? (github ? githubRoomInCommand(fields.command, github) : undefined);
   }
   const field = PATH_FIELD.get(tool);
   const value = field ? fields[field] : undefined;

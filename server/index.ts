@@ -20,6 +20,7 @@ import { describeStateMigration, legacyEnvWarning, migrateLegacyStateDir } from 
 import { errMsg, log } from './log';
 import { NameStore } from './model/names';
 import { AgentNames } from './model/agent-names';
+import { GithubRepos } from './model/github-repos';
 import { Office } from './model/office';
 import { RoomAliases } from './model/room-aliases';
 import { createPtyRoutes } from './http/pty';
@@ -139,7 +140,15 @@ const office = new Office({
 // pastas do Codex; HABBLAUD_CODEX=0 desliga), com o histórico dela no HistorySet abaixo e as contas registradas por
 // ela mesma (accounts.setProviderAccounts). `codex` também recebe os eventos dos hooks do Codex (CodexLive).
 const agentNames = config.agentNamesFile ? new AgentNames(config.agentNamesFile) : undefined;
-const claude = new ClaudeWatcher({ accounts, office, inDocker: config.inDocker, repoRoots: config.repoRoots, agentNames });
+const githubRepos = config.repoRoots.length ? new GithubRepos(config.repoRoots) : undefined;
+const claude = new ClaudeWatcher({
+  accounts,
+  office,
+  inDocker: config.inDocker,
+  repoRoots: config.repoRoots,
+  githubRepos: githubRepos ? (ownerRepo) => githubRepos.lookup(ownerRepo) : undefined,
+  agentNames,
+});
 const agents = new SourceSet([claude]);
 const codexDirs = config.codex ? discoverCodexDirs(process.env, config.home) : [];
 const codex = codexDirs.length ? new CodexSource({ accounts, office, dirs: codexDirs, env: process.env, home: config.home }) : undefined;
