@@ -12,6 +12,11 @@ describe('parseRepoRoots', () => {
     expect(parseRepoRoots(' , ,')).toEqual([]);
   });
 
+  it('normaliza a raiz (//, /./, ..) e descarta raiz relativa ou "/" (B6)', () => {
+    expect(parseRepoRoots('/data//OpenBot/Shared/./Github/')).toEqual(['/data/OpenBot/Shared/Github']);
+    expect(parseRepoRoots('/data/x/../Github, relativa/repos, ./repos, /, //')).toEqual(['/data/Github']);
+  });
+
   it('separa por vírgula, tira espaços, itens vazios e barras finais', () => {
     expect(parseRepoRoots(' /data/a/ , /data/b//,,/data/c ')).toEqual(['/data/a', '/data/b', '/data/c']);
   });

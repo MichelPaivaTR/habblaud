@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { discoverClaudeDirs } from './accounts/detect';
 import { parseAllowedHosts } from './http/guard';
@@ -256,11 +256,16 @@ export function viewOffReason(env: NodeJS.ProcessEnv, host: string): string | un
   return isTailnetBind(host) ? undefined : tr('HABBLAUD_VIEW_REMOTE pede um IP da tailnet em HABBLAUD_HOST (estava {0})', [host]);
 }
 
-/** HABBLAUD_REPO_ROOTS: lista separada por vírgula; espaços, itens vazios e barras finais saem. */
+/**
+ * HABBLAUD_REPO_ROOTS: lista separada por vírgula; espaços e itens vazios saem, cada raiz é normalizada (`//`, `/./`, `..`
+ * e barra final) e raiz relativa ou "/" é descartada. A sala comum e a das cwd usam a mesma forma (repoRoomOf também normaliza).
+ */
 export function parseRepoRoots(raw: string | undefined): string[] {
   return (raw ?? '')
     .split(',')
-    .map((r) => r.trim().replace(/\/+$/, ''))
+    .map((r) => r.trim())
+    .filter((r) => r.startsWith('/'))
+    .map((r) => posix.normalize(r).replace(/\/+$/, ''))
     .filter((r) => r !== '');
 }
 
