@@ -531,7 +531,7 @@ server.listen(config.port, config.host, () => {
   log.info(
     config.messages
       ? tr('   Mensagens pelo escritório: ligadas (precisa do plugin habblaud-mensagens: npm run mod:install).')
-      : tr('   Mensagens pelo escritório: desligadas ({0}).', [messagesOffReason(process.env, config.host, config.inDocker)]),
+      : tr('   Mensagens pelo escritório: desligadas ({0}).', [messagesOffReason(process.env, config.host, config.inDocker) ?? tr('modo de visualização: só leitura')]),
   );
   if (config.messages) {
     log.info(
