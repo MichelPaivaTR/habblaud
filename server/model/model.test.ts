@@ -1,14 +1,14 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { Activity } from '../../shared/types';
+import type { AccountInfo, Activity } from '../../shared/types';
 import { nameKey } from '../../shared/appearance';
 import { hash32 } from '../../shared/hash';
 import { NAME_POOL } from '../../shared/names';
 import { setQuiet } from '../log';
 import { tempDir } from '../test/fixtures';
 import { NameStore } from './names';
-import { DONE_GRACE_MS, Office, OFFLINE_GRACE_MS, SNAPSHOT_RECENT } from './office';
+import { DONE_GRACE_MS, Office, type OfficeDeps, OFFLINE_GRACE_MS, REPO_TTL_MS, SNAPSHOT_RECENT } from './office';
 import { normalizeCwd, roomDisplayNames, SlotAllocator } from './rooms';
 
 setQuiet(true);
@@ -795,5 +795,267 @@ describe('Office: personagem do projeto', () => {
     expect(names.character('/p/api')?.owner).toBe('s2');
     office.switchSession('acc:2', 's2b');
     expect(names.character('/p/api')?.owner).toBe('s2b');
+  });
+});
+
+describe('Office: sala por repositório', () => {
+  const ROOT = '/data/OpenBot/Shared/Github';
+  const REPO_A = `${ROOT}/alfa`;
+  const REPO_B = `${ROOT}/beta`;
+  const setup = (repoRoots: string[] = [ROOT]) => {
+    let clock = 1_000_000;
+    const office = new Office({
+      names: new NameStore(null),
+      version: 't',
+      startedAt: clock,
+      accounts: () => [],
+      sources: () => [],
+      accountName: () => undefined,
+      repoRoots,
+      now: () => clock,
+    });
+    const main = (id: string, cwd = `/data/OpenBot/Agents/agent-${id}`) =>
+      office.addMain({ id, account: 'acc', sessionId: `s-${id}`, cwd, role: 'Agente principal', startedAt: clock, status: 'working' });
+    const rooms = () => office.commit().snapshot.rooms.map((r) => r.id);
+    return { office, main, rooms, advance: (ms: number) => (clock += ms), now: () => clock };
+  };
+
+  it('quem chega sem repositório vai para a sala comum, nunca para uma sala do agente', () => {
+    const { office, main, rooms } = setup();
+    main('acc:1');
+    expect(office.get('acc:1')?.roomId).toBe(ROOT);
+    expect(rooms()).toEqual([ROOT]);
+  });
+
+  it('a pasta da sessão dentro de um repositório já começa nele', () => {
+    const { office, main } = setup();
+    main('acc:1', `${REPO_A}/server`);
+    expect(office.get('acc:1')?.roomId).toBe(REPO_A);
+  });
+
+  it('evidência move o agente para a sala do repositório; a comum some quando fica vazia', () => {
+    const { office, main, rooms, now } = setup();
+    main('acc:1');
+    office.setRepo('acc:1', REPO_A, now());
+    expect(office.get('acc:1')?.roomId).toBe(REPO_A);
+    expect(rooms()).toEqual([REPO_A]);
+  });
+
+  it('chegada e mudança de sala no mesmo ciclo dão um aviso só, na sala certa (B7)', () => {
+    const { office, main, now } = setup();
+    main('acc:1');
+    office.setRepo('acc:1', REPO_A, now());
+    const texts = office.commit().notices.map((n) => n.text);
+    expect(texts.filter((t) => t.startsWith('👋'))).toHaveLength(1);
+    expect(texts.some((t) => t.startsWith('🚚'))).toBe(false);
+    expect(texts.find((t) => t.startsWith('👋'))).toContain(REPO_A.split('/').pop() as string);
+  });
+
+  it('mudança de sala depois do aviso de chegada ter saído continua avisando "foi para" (B7)', () => {
+    const { office, main, now } = setup();
+    main('acc:1');
+    office.commit();
+    office.setRepo('acc:1', REPO_A, now());
+    expect(office.commit().notices.map((n) => n.text).some((t) => t.startsWith('🚚'))).toBe(true);
+  });
+
+  it('dois agentes no mesmo repositório ficam na mesma sala', () => {
+    const { office, main, rooms, now } = setup();
+    main('acc:1');
+    main('acc:2');
+    office.setRepo('acc:1', REPO_A, now());
+    office.setRepo('acc:2', REPO_A, now());
+    expect(office.get('acc:2')?.roomId).toBe(REPO_A);
+    expect(rooms()).toEqual([REPO_A]);
+  });
+
+  it('troca de A para B no mesmo snapshot', () => {
+    const { office, main, now } = setup();
+    main('acc:1');
+    office.setRepo('acc:1', REPO_A, now());
+    office.commit();
+    office.setRepo('acc:1', REPO_B, now());
+    const snap = office.commit().snapshot;
+    expect(snap.agents.find((a) => a.id === 'acc:1')?.roomId).toBe(REPO_B);
+    expect(snap.rooms.map((r) => r.id)).toEqual([REPO_B]);
+  });
+
+  it('subagente de um agente vai com o pai, e a evidência dele move o pai', () => {
+    const { office, main, now } = setup();
+    main('acc:1');
+    office.addSub({ id: 'acc:1:sub', parentId: 'acc:1', sessionId: 's-acc:1', role: 'Explore', background: false, startedAt: now() });
+    office.setRepo('acc:1:sub', REPO_A, now());
+    expect(office.get('acc:1')?.roomId).toBe(REPO_A);
+    expect(office.get('acc:1:sub')?.roomId).toBe(REPO_A);
+  });
+
+  it('sem evidência por mais de 30 min, o agente volta para a sala comum (relógio injetado)', () => {
+    const { office, main, now, advance } = setup();
+    main('acc:1');
+    office.setRepo('acc:1', REPO_A, now());
+    advance(REPO_TTL_MS);
+    office.tick();
+    expect(office.get('acc:1')?.roomId).toBe(REPO_A);
+    advance(1);
+    office.tick();
+    expect(office.get('acc:1')?.roomId).toBe(ROOT);
+  });
+
+  it('/clear (troca de sessão) volta para a sala comum', () => {
+    const { office, main, now } = setup();
+    main('acc:1');
+    office.setRepo('acc:1', REPO_A, now());
+    office.switchSession('acc:1', 's-nova');
+    expect(office.get('acc:1')?.roomId).toBe(ROOT);
+  });
+
+  it('evidência mais velha que o TTL é ignorada (carga inicial do transcript)', () => {
+    const { office, main, now } = setup();
+    main('acc:1');
+    office.setRepo('acc:1', REPO_A, now() - REPO_TTL_MS - 1);
+    expect(office.get('acc:1')?.roomId).toBe(ROOT);
+  });
+
+  it('vale a última evidência; uma mais antiga que a já vista não move', () => {
+    const { office, main, now, advance } = setup();
+    main('acc:1');
+    office.setRepo('acc:1', REPO_A, now());
+    advance(1_000);
+    office.setRepo('acc:1', REPO_B, now());
+    office.setRepo('acc:1', REPO_A, now() - 500);
+    expect(office.get('acc:1')?.roomId).toBe(REPO_B);
+  });
+
+  it('a sala comum leva o nome do alias (Sem repositório) quando ele é dado', () => {
+    const office = new Office({
+      names: new NameStore(null),
+      version: 't',
+      startedAt: 0,
+      accounts: () => [],
+      sources: () => [],
+      accountName: () => undefined,
+      repoRoots: [ROOT],
+      roomAlias: (path) => (path === ROOT ? 'Sem repositório' : undefined),
+    });
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/data/OpenBot/Agents/agent-1', role: 'Agente principal', startedAt: 0, status: 'idle' });
+    expect(office.commit().snapshot.rooms.map((r) => r.name)).toEqual(['Sem repositório']);
+  });
+
+  it('sem raízes configuradas, a sala é a pasta da sessão e a evidência não move nada', () => {
+    const { office, main, now } = setup([]);
+    main('acc:1', '/p/loja');
+    office.setRepo('acc:1', REPO_A, now());
+    expect(office.get('acc:1')?.roomId).toBe('/p/loja');
+  });
+});
+
+describe('Office: nome do agente do OpenBot', () => {
+  const ID = 'agent-3d36e8ea-5d84-4d50-9be7-d88973e927bc';
+  const deps = () => ({ names: new NameStore(null), version: 't', startedAt: 0, accounts: () => [], sources: () => [], accountName: () => undefined });
+  const main = (office: Office, sessionId: string, name = 'Faísca', agentId = ID) =>
+    office.addMain({
+      id: `.claude:${sessionId}`,
+      account: 'acc',
+      sessionId,
+      cwd: `/data/OpenBot/Agents/${agentId}`,
+      role: 'Agente principal',
+      startedAt: 0,
+      status: 'idle',
+      openbot: { agentId, name },
+    });
+
+  it('usa o nome do OpenBot com a mesma aparência em duas instâncias (CA2.2)', () => {
+    const a = new Office(deps());
+    const b = new Office(deps());
+    main(a, 's1');
+    main(b, 's1');
+    expect(a.get('.claude:s1')?.name).toBe('Faísca');
+    expect(a.get('.claude:s1')).toMatchObject({ look: b.get('.claude:s1')?.look, seed: b.get('.claude:s1')?.seed });
+  });
+
+  it('não grava o nome no NameStore (nada em names.json)', () => {
+    const d = deps();
+    main(new Office(d), 's1');
+    expect(d.names.get('s1')).toBeUndefined();
+  });
+
+  it('o /clear mantém o nome e não passa pelo NameStore', () => {
+    const d = deps();
+    const office = new Office(d);
+    main(office, 's1');
+    office.switchSession('.claude:s1', 's2');
+    expect(office.get('.claude:s1')?.name).toBe('Faísca');
+    expect(d.names.get('s2')).toBeUndefined();
+  });
+
+  it('duas sessões do mesmo agente recebem "Faísca" e "Faísca 2"', () => {
+    const office = new Office(deps());
+    main(office, 's1');
+    main(office, 's2');
+    expect(office.get('.claude:s1')?.name).toBe('Faísca');
+    expect(office.get('.claude:s2')?.name).toBe('Faísca 2');
+  });
+
+  it('sem nome no arquivo: agent- e os 8 primeiros caracteres do uuid', () => {
+    const office = new Office(deps());
+    main(office, 's1', 'agent-3d36e8ea');
+    expect(office.get('.claude:s1')?.name).toBe('agent-3d36e8ea');
+  });
+
+  it('nome do OpenBot que chega depois (fallback -> real) é trocado sem recriar a sessão', () => {
+    const office = new Office(deps());
+    main(office, 's1', 'agent-3d36e8ea');
+    expect(office.get('.claude:s1')?.name).toBe('agent-3d36e8ea');
+    office.renameOpenbot('.claude:s1', 'Faísca');
+    expect(office.get('.claude:s1')?.name).toBe('Faísca');
+    expect(office.get('.claude:s1')?.id).toBe('.claude:s1');
+  });
+
+  it('renomear o agente mantém o sufixo de duplicata da outra sessão e não mexe sem mudança', () => {
+    const office = new Office(deps());
+    main(office, 's1');
+    main(office, 's2');
+    expect(office.get('.claude:s2')?.name).toBe('Faísca 2');
+    office.renameOpenbot('.claude:s1', 'Faísca');
+    expect(office.get('.claude:s1')?.name).toBe('Faísca');
+    office.renameOpenbot('.claude:s1', 'Nova');
+    expect(office.get('.claude:s1')?.name).toBe('Nova');
+    expect(office.get('.claude:s2')?.name).toBe('Faísca 2');
+  });
+
+  it('sem o campo openbot: nome sorteado, como antes', () => {
+    const d = deps();
+    const office = new Office(d);
+    office.addMain({ id: 'acc:1', account: 'acc', sessionId: 's1', cwd: '/p/loja', role: 'Agente principal', startedAt: 0, status: 'idle' });
+    expect(d.names.get('s1')).toBeDefined();
+  });
+});
+
+describe('Office: contas no modo de visualização', () => {
+  const account = {
+    id: '.claude',
+    short: 'A',
+    name: 'Conta A',
+    color: '#f08a3c',
+    configDir: '/data/.claude',
+    email: 'pessoa@exemplo.com',
+    organization: 'Org Secreta',
+    plan: 'Max',
+    sessions: 0,
+    usageStatus: 'disabled',
+  } as unknown as AccountInfo;
+  const deps = (extra: Partial<OfficeDeps> = {}) =>
+    new Office({ names: new NameStore(null), version: 't', startedAt: 0, accounts: () => [account], sources: () => [], accountName: () => undefined, ...extra });
+
+  it('com view: e-mail e organização somem; plano e nome ficam', () => {
+    const [acc] = deps({ view: true }).commit().snapshot.accounts;
+    expect(acc).not.toHaveProperty('email');
+    expect(acc).not.toHaveProperty('organization');
+    expect(acc).toMatchObject({ id: '.claude', name: 'Conta A', plan: 'Max' });
+  });
+
+  it('sem view: iguais a antes', () => {
+    const [acc] = deps().commit().snapshot.accounts;
+    expect(acc).toMatchObject({ email: 'pessoa@exemplo.com', organization: 'Org Secreta' });
   });
 });

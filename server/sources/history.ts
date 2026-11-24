@@ -6,7 +6,7 @@
 import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { open, readdir, stat } from 'node:fs/promises';
 import { join, sep } from 'node:path';
-import { truncate } from '../../shared/activity';
+import { maskSecrets, truncate } from '../../shared/activity';
 import type { AgentInfo, RecentSession } from '../../shared/types';
 import { errMsg, log } from '../log';
 import type { HistoryProvider, HistoryResolveResult } from './source';
@@ -298,7 +298,7 @@ function firstPrompt(lines: readonly string[]): string | undefined {
       continue;
     }
     const user = entries.find((e) => e.kind === 'user');
-    if (user?.kind === 'user' && user.text.trim()) return truncate(user.text, TITLE_MAX);
+    if (user?.kind === 'user' && user.text.trim()) return truncate(maskSecrets(user.text), TITLE_MAX);
   }
   return undefined;
 }

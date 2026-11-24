@@ -10,6 +10,20 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Adicionado
+
+- **Salas por repositório (`HABBLAUD_REPO_ROOTS`).** Com as pastas dos repositórios configuradas, a sala de cada agente é o
+  repositório onde ele trabalhou por último (pelos arquivos e comandos que usou). Quem não está em nenhum fica em “Sem
+  repositório”, e a sala volta para lá após 30 min sem evidência ou ao trocar de sessão (`/clear`). Sem a variável, a sala
+  continua sendo a pasta da sessão.
+- **Visualização pela tailnet (`HABBLAUD_VIEW_REMOTE=1`).** Com `HABBLAUD_HOST` num IP da tailnet, o terminal, o histórico de
+  sessões e o filtro “Só prompts” ficam disponíveis só para leitura. Enviar mensagens, digitar, permissões e entregas
+  continuam bloqueados, e a caixa de mensagem mostra “Somente leitura”. Sem a flag, ou com um host fora da tailnet,
+  nada muda.
+- **Nome do agente do OpenBot (`HABBLAUD_AGENT_NAMES_FILE`).** Com o arquivo de nomes configurado, o personagem de cada
+  agente do OpenBot mostra o nome dele no OpenBot, com a mesma aparência em todo reinício. Sem nome no arquivo, aparece
+  `agent-` e os 8 primeiros caracteres do id.
+
 ## [1.0.3] - 2026-10-16
 
 ### Corrigido

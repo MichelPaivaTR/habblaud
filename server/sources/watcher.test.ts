@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentInfo, Notice } from '../../shared/types';
 import { AccountsService } from '../accounts/service';
 import { setQuiet } from '../log';
+import { AgentNames } from '../model/agent-names';
 import { NameStore } from '../model/names';
 import { Office } from '../model/office';
 import { appendLines, L, tempDir, writeLines } from '../test/fixtures';
@@ -14,7 +15,7 @@ setQuiet(true);
 
 const CWD = '/projetos/loja';
 
-function setup(opts: { tailBytes?: number } = {}) {
+function setup(opts: { tailBytes?: number; repoRoots?: string[]; agentNames?: AgentNames } = {}) {
   const tmp = tempDir();
   const home = tmp.dir;
   const dir = join(home, '.claude');
@@ -37,11 +38,22 @@ function setup(opts: { tailBytes?: number } = {}) {
     accounts: (s) => accounts.list(s),
     sources: () => [],
     accountName: (id) => accounts.find(id)?.detected.name,
+    repoRoots: opts.repoRoots,
     now,
   });
   late.office = office;
   const alive = new Set<number>();
-  const watcher = new ClaudeWatcher({ accounts, office, inDocker: false, now, isAlive: (pid) => alive.has(pid), watch: false, tailBytes: opts.tailBytes });
+  const watcher = new ClaudeWatcher({
+    accounts,
+    office,
+    inDocker: false,
+    now,
+    isAlive: (pid) => alive.has(pid),
+    watch: false,
+    tailBytes: opts.tailBytes,
+    repoRoots: opts.repoRoots,
+    agentNames: opts.agentNames,
+  });
   const notices: Notice[] = [];
 
   const ctx = {
@@ -742,5 +754,115 @@ describe('ClaudeWatcher — shell lançado no começo de um transcript maior que
       c.watcher.stop();
       c.tmp.cleanup();
     }
+  });
+});
+
+describe('ClaudeWatcher — sala por repositório', () => {
+  const REPOS = '/repos';
+  let c: Ctx;
+  beforeEach(() => {
+    c = setup({ repoRoots: [REPOS] });
+  });
+  afterEach(() => {
+    c.watcher.stop();
+    c.tmp.cleanup();
+  });
+
+  const mainAgent = () => c.agents().find((a) => a.kind === 'main')!;
+
+  it('boot: a sala é o repositório que a sessão leu, sem sala de pasta de agente', () => {
+    writeLines(c.transcript('sess-r'), [
+      L.prompt('Revisa o alfa', { at: c.now() - 9000 }),
+      L.assistant([L.tool('r1', 'Read', { file_path: `${REPOS}/alfa/src/a.ts` })], { at: c.now() - 4000 }),
+    ]);
+    c.openSession(100, 'sess-r');
+    c.watcher.boot();
+    expect(mainAgent().roomId).toBe(`${REPOS}/alfa`);
+    expect(c.office.commit().snapshot.rooms.map((r) => r.id)).toEqual([`${REPOS}/alfa`]);
+  });
+
+  it('ao vivo: editar outro repositório move o agente para a sala dele', () => {
+    writeLines(c.transcript('sess-r'), [L.prompt('Oi', { at: c.now() - 9000 })]);
+    c.openSession(100, 'sess-r');
+    c.watcher.boot();
+    expect(mainAgent().roomId).toBe(REPOS);
+    appendLines(c.transcript('sess-r'), [L.assistant([L.tool('e1', 'Edit', { file_path: `${REPOS}/beta/b.ts` })])]);
+    c.poll();
+    expect(mainAgent().roomId).toBe(`${REPOS}/beta`);
+  });
+
+  it('evidência de duas horas atrás (carga inicial) não move: fica na sala comum', () => {
+    writeLines(c.transcript('sess-r'), [
+      L.prompt('Oi', { at: c.now() - 3 * 3_600_000 }),
+      L.assistant([L.tool('r1', 'Read', { file_path: `${REPOS}/alfa/a.ts` })], { at: c.now() - 2 * 3_600_000 }),
+    ]);
+    c.openSession(100, 'sess-r');
+    c.watcher.boot();
+    expect(mainAgent().roomId).toBe(REPOS);
+  });
+
+  it('várias evidências: a última (pela linha do transcript) vence', () => {
+    writeLines(c.transcript('sess-r'), [
+      L.assistant([L.tool('r1', 'Read', { file_path: `${REPOS}/alfa/a.ts` })], { at: c.now() - 4000 }),
+      L.assistant([L.tool('r2', 'Edit', { file_path: `${REPOS}/beta/b.ts` })], { at: c.now() - 3000 }),
+    ]);
+    c.openSession(100, 'sess-r');
+    c.watcher.boot();
+    expect(mainAgent().roomId).toBe(`${REPOS}/beta`);
+  });
+
+  it('subagente que lê um repositório leva o principal e ele mesmo para a sala', () => {
+    writeLines(c.transcript('sess-r'), [L.prompt('Oi', { at: c.now() - 9000 })]);
+    c.openSession(100, 'sess-r');
+    c.watcher.boot();
+    appendLines(c.transcript('sess-r'), [L.assistant([L.tool('toolu_g', 'Agent', { description: 'Mapear', subagent_type: 'Explore', prompt: 'x' })])]);
+    c.subFile('sess-r', 'g1', { agentType: 'Explore', description: 'Mapear', toolUseId: 'toolu_g', spawnDepth: 1, requestShape: 'foreground' }, [
+      L.prompt('Mapeie o gamma', { agentId: 'g1' }),
+      L.assistant([L.tool('g1', 'Grep', { pattern: 'x', path: `${REPOS}/gamma` })], { agentId: 'g1' }),
+    ]);
+    c.poll();
+    expect(mainAgent().roomId).toBe(`${REPOS}/gamma`);
+    expect(c.agent('sess-r:g1')?.roomId).toBe(`${REPOS}/gamma`);
+  });
+});
+
+describe('ClaudeWatcher — nome do agente do OpenBot', () => {
+  const ID = 'agent-3d36e8ea-5d84-4d50-9be7-d88973e927bc';
+  let c: Ctx;
+  let names: { dir: string; cleanup: () => void };
+  beforeEach(() => {
+    names = tempDir();
+    writeFileSync(join(names.dir, 'names.json'), JSON.stringify({ agents: { [ID]: 'Faísca' } }));
+  });
+  afterEach(() => {
+    c.watcher.stop();
+    c.tmp.cleanup();
+    names.cleanup();
+  });
+
+  it('sessão na pasta de um agente do OpenBot usa o nome do arquivo de nomes', () => {
+    c = setup({ agentNames: new AgentNames(join(names.dir, 'names.json')) });
+    c.openSession(100, 'sess-o', { cwd: `/data/OpenBot/Agents/${ID}` });
+    c.watcher.boot();
+    expect(c.agents().find((a) => a.kind === 'main')?.name).toBe('Faísca');
+  });
+
+  it('primeira subida sem o arquivo: agent-<8>; quando o arquivo aparece, o nome real entra no ciclo seguinte', () => {
+    rmSync(join(names.dir, 'names.json'));
+    c = setup({ agentNames: new AgentNames(join(names.dir, 'names.json'), () => c.now()) });
+    c.openSession(100, 'sess-o', { cwd: `/data/OpenBot/Agents/${ID}` });
+    c.watcher.boot();
+    expect(c.agents().find((a) => a.kind === 'main')?.name).toBe('agent-3d36e8ea');
+    writeFileSync(join(names.dir, 'names.json'), JSON.stringify({ agents: { [ID]: 'Faísca' } }));
+    c.advance(30_000);
+    c.poll();
+    expect(c.agents().find((a) => a.kind === 'main')?.name).toBe('Faísca');
+  });
+
+  it('sem o arquivo configurado, o nome é o sorteado, como antes', () => {
+    c = setup();
+    c.openSession(100, 'sess-o', { cwd: `/data/OpenBot/Agents/${ID}` });
+    c.watcher.boot();
+    expect(c.agents().find((a) => a.kind === 'main')?.name).not.toBe('Faísca');
   });
 });

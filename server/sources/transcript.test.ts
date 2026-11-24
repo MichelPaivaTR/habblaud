@@ -1,7 +1,8 @@
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { log } from '../log';
+import { GithubRepos } from '../model/github-repos';
 import { L, tempDir } from '../test/fixtures';
 import { FileTail, MAX_LINE_BYTES } from './tail';
 import {
@@ -167,6 +168,28 @@ describe('parseLine — títulos, tarefas e números', () => {
       L.assistant([L.tool('u2', 'TaskUpdate', { taskId: '8', status: 'deleted' })]),
     ]);
     expect(s2.tasks).toEqual([{ id: '7', title: 'Escrever testes', status: 'in_progress', activeForm: 'Escrevendo testes' }]);
+  });
+
+  it('segredos mascarados na fonte: títulos, tarefas, subagente e prompt (A1)', () => {
+    const GH = 'ghp_0123456789abcdefghijklmnopqrstuvwxyzAB';
+    const SK = 'sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUV';
+    const s = createTranscriptState();
+    const r = feed(s, [
+      L.prompt(`Use ${GH} no deploy`, { at: T0 }),
+      L.raw('custom-title', { customTitle: `Deploy ${GH}` }),
+      L.raw('ai-title', { aiTitle: `Deploy ${SK}` }),
+      L.assistant([
+        L.tool('t1', 'TodoWrite', { todos: [{ content: `Rodar com ${GH}`, status: 'in_progress', activeForm: `Rodando com ${SK}` }] }),
+        L.tool('c1', 'TaskCreate', { subject: `Criar ${GH}`, activeForm: `Criando ${SK}` }),
+        L.tool('a1', 'Agent', { description: `Usa ${GH}`, subagent_type: 'general-purpose', prompt: 'x' }),
+      ]),
+      L.assistant([L.tool('u1', 'TaskUpdate', { taskId: 'c1', subject: `Mudar ${SK}`, activeForm: `Mudando ${GH}` })]),
+    ]);
+    const all = JSON.stringify({ s, r });
+    expect(all).not.toContain(GH.slice(0, 16));
+    expect(all).not.toContain(SK.slice(0, 16));
+    expect(titleOf(s)).toBe('Deploy gh*_***');
+    expect(s.tasks.map((t) => t.title)).toContain('Rodar com gh*_***');
   });
 
   it('tokens: linhas da mesma mensagem contam uma vez (com o uso final)', () => {
@@ -467,5 +490,50 @@ describe('janela final + prefixo em segundo plano', () => {
 
   it('applyTaskOp ignora atualização de tarefa desconhecida', () => {
     expect(applyTaskOp([], { op: 'update', id: '9', status: 'completed' })).toEqual([]);
+  });
+});
+
+describe('parseLine — sinal repoHint', () => {
+  const ROOTS = ['/data/OpenBot/Shared/Github'];
+  const REPO = '/data/OpenBot/Shared/Github/habblaud';
+  const one = (line: string, roots: string[] = ROOTS) => parseLine(createTranscriptState(), line, { idPrefix: 'a', now: T0, repoRoots: roots });
+
+  it('Edit em um repositório emite repoHint com o instante da linha', () => {
+    const r = one(L.assistant([L.tool('e1', 'Edit', { file_path: `${REPO}/server/x.ts` })], { at: T0 - 1000 }));
+    expect(r.signals).toContainEqual({ type: 'repoHint', repo: REPO, at: T0 - 1000 });
+  });
+
+  it('sem raízes configuradas, nenhum repoHint', () => {
+    const r = one(L.assistant([L.tool('e1', 'Edit', { file_path: `${REPO}/server/x.ts` })]), []);
+    expect(r.signals.some((s) => s.type === 'repoHint')).toBe(false);
+  });
+
+  it('caminho fora dos repositórios e ferramenta sem caminho não emitem nada', () => {
+    const fora = one(L.assistant([L.tool('e1', 'Read', { file_path: '/data/OpenBot/Shared/escritorio-virtual/02.md' })]));
+    const sem = one(L.assistant([L.tool('e2', 'Agent', { description: 'x', prompt: `${REPO}/a` })]));
+    expect(fora.signals.some((s) => s.type === 'repoHint')).toBe(false);
+    expect(sem.signals.some((s) => s.type === 'repoHint')).toBe(false);
+  });
+
+  it('caso real da H11: só gh api repos/dono/repo, pasta do agente como cwd, cai na sala do clone', () => {
+    const tmp = tempDir('habblaud-h11-');
+    try {
+      mkdirSync(join(tmp.dir, 'fiscal-natural-uso', '.git'), { recursive: true });
+      writeFileSync(join(tmp.dir, 'fiscal-natural-uso', '.git', 'config'), '[remote "origin"]\n\turl = https://github.com/michelcpaiva-personal/fiscal-natural-uso.git\n');
+      const repos = new GithubRepos([tmp.dir]);
+      const line = L.assistant([L.tool('g1', 'Bash', { command: 'gh api repos/michelcpaiva-personal/fiscal-natural-uso/issues?state=open' })], { at: T0 });
+      const r = parseLine(createTranscriptState(), line, { idPrefix: 'a', now: T0, repoRoots: [tmp.dir], githubRepos: (k) => repos.lookup(k) });
+      expect(r.signals).toContainEqual({ type: 'repoHint', repo: `${tmp.dir}/fiscal-natural-uso`, at: T0 });
+      // Sem o resolvedor (sem as raízes do GitHub) segue em "Sem repositório".
+      const sem = parseLine(createTranscriptState(), line, { idPrefix: 'a', now: T0, repoRoots: [tmp.dir] });
+      expect(sem.signals.some((x) => x.type === 'repoHint')).toBe(false);
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it('Bash com cd emite repoHint', () => {
+    const r = one(L.assistant([L.tool('b1', 'Bash', { command: `cd ${REPO} && npm test` })]));
+    expect(r.signals).toContainEqual(expect.objectContaining({ type: 'repoHint', repo: REPO }));
   });
 });

@@ -6,7 +6,7 @@ import http from 'node:http';
 import { join } from 'node:path';
 import { codexDirsRefused, isDefaultDir } from './accounts/detect';
 import { AccountsService } from './accounts/service';
-import { isTruthy, loadConfig, messagesOffReason, terminalOffReason, worldSocketUrl } from './config';
+import { isTruthy, loadConfig, messagesOffReason, terminalOffReason, viewOffReason, worldSocketUrl } from './config';
 import { createApiHandler, sendJson } from './http/app';
 import { createRequestGuard, isLoopbackHost } from './http/guard';
 import { createRemoteGate, isRemoteRequest, loadSecret, RemoteSessions, startRemoteListener, type RemoteListener } from './http/remote';
@@ -19,6 +19,8 @@ import { DayStatsService } from './history/daystats';
 import { describeStateMigration, legacyEnvWarning, migrateLegacyStateDir } from './legacy';
 import { errMsg, log } from './log';
 import { NameStore } from './model/names';
+import { AgentNames } from './model/agent-names';
+import { GithubRepos } from './model/github-repos';
 import { Office } from './model/office';
 import { RoomAliases } from './model/room-aliases';
 import { createPtyRoutes } from './http/pty';
@@ -77,6 +79,8 @@ names.load();
 // Nomes de sala escolhidos pelo usuário (botão direito > Renomear).
 const roomAliases = new RoomAliases(join(config.dataDir, 'rooms.json'));
 roomAliases.load();
+// Com repositórios configurados, a primeira raiz é a sala comum dos agentes sem repositório.
+if (config.repoRoots[0]) roomAliases.setDefault(config.repoRoots[0], tr('Sem repositório'));
 
 // Office, contas e fontes de agentes se referenciam (avisos de mudança / fontes): ligação tardia.
 const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry; ptys?: PtyManager; ptyOff?: string } = {};
@@ -116,6 +120,7 @@ const accounts = new AccountsService({
 const office = new Office({
   names,
   roomAlias: (path) => roomAliases.get(path),
+  repoRoots: config.repoRoots,
   version: config.version,
   // No modo dev o Vite serve o cliente direto do código-fonte: não há build para comparar.
   build: config.dev ? undefined : createBuildReader(config.rootDir),
@@ -123,7 +128,8 @@ const office = new Office({
   accounts: (sessions) => accounts.list(sessions),
   sources: () => late.agents?.sources() ?? [],
   accountName: (id) => accounts.find(id)?.detected.name,
-  terminal: config.terminal,
+  terminal: config.terminal || config.view,
+  view: config.view,
   permissions: () => late.permissions?.snapshot() ?? new Map(),
   messages: config.messages ? () => late.messages?.reachable() ?? new Set() : undefined,
   ptys: () => (late.ptys ? { status: late.ptys.status(), list: late.ptys.list() } : { status: { enabled: false, reason: late.ptyOff ?? tr('desligado') }, list: [] }),
@@ -133,7 +139,16 @@ const office = new Office({
 // Fontes de agentes, uma por ferramenta (sources/source.ts): a do Claude Code e, depois dela, a do Codex (quando há
 // pastas do Codex; HABBLAUD_CODEX=0 desliga), com o histórico dela no HistorySet abaixo e as contas registradas por
 // ela mesma (accounts.setProviderAccounts). `codex` também recebe os eventos dos hooks do Codex (CodexLive).
-const claude = new ClaudeWatcher({ accounts, office, inDocker: config.inDocker });
+const agentNames = config.agentNamesFile ? new AgentNames(config.agentNamesFile) : undefined;
+const githubRepos = config.repoRoots.length ? new GithubRepos(config.repoRoots) : undefined;
+const claude = new ClaudeWatcher({
+  accounts,
+  office,
+  inDocker: config.inDocker,
+  repoRoots: config.repoRoots,
+  githubRepos: githubRepos ? (ownerRepo) => githubRepos.lookup(ownerRepo) : undefined,
+  agentNames,
+});
 const agents = new SourceSet([claude]);
 const codexDirs = config.codex ? discoverCodexDirs(process.env, config.home) : [];
 const codex = codexDirs.length ? new CodexSource({ accounts, office, dirs: codexDirs, env: process.env, home: config.home }) : undefined;
@@ -145,6 +160,7 @@ late.office = office;
 late.agents = agents;
 // Página que pode responder pelo escritório: Host local na porta local; na remota, só com permissions liberado.
 const hub = new Hub(office, {
+  mask: config.view,
   canAnswer: (req) => (isRemoteRequest(req) ? !!config.remote?.allow.has('permissions') : isLoopbackHost(req.headers.host)),
 });
 // "Meu dia": amostra o escritório a cada segundo e persiste em <dataDir>/stats/ (ver history/daystats.ts).
@@ -188,17 +204,18 @@ if (worldUplink && worldSocial) {
 }
 // Terminal: só existe com bind local (ver terminalOffReason em config.ts).
 // Cada agente com o parser da ferramenta dele (o do Claude Code por padrão).
-const terminals = config.terminal
+const terminals = config.terminal || config.view
   ? new TerminalStreams({ office, transcriptPathOf: (id) => agents.transcriptPathOf(id), parserFor: (id) => agents.parserFor(id) })
   : undefined;
-// Histórico do terminal (sessões recentes, abertas ou encerradas, de todas as ferramentas): mesma trava.
-const history = config.terminal
+// Histórico do terminal (sessões recentes, abertas ou encerradas, de todas as ferramentas): mesma trava, ou só a leitura pela tailnet.
+const history = config.terminal || config.view
   ? new HistorySet([new SessionHistory({ accounts: () => accounts.entries(), openAgentOf: (acc, sid) => openMainAgent(office.list(), acc, sid) })])
   : undefined;
 if (history && codex) history.add(new CodexHistory({ accounts: () => accounts.entriesOf('codex'), openAgentOf: (acc, sid) => openMainAgent(office.list(), acc, sid) }));
 // Entregas: o fim de cada pedido, lido dos transcripts do histórico (mesma trava do terminal). Os arquivos entregues
-// são lidos aqui (Node, ou pasta de conta montada no Docker) ou pelo auxiliar do host.
-const deliveries = history
+// são lidos aqui (Node, ou pasta de conta montada no Docker) ou pelo auxiliar do host. Fora do terminal (modo de
+// leitura pela tailnet), não existem: servem arquivos da máquina.
+const deliveries = config.terminal && history
   ? new DeliveryIndex({
       sessions: () => history.list(),
       resolve: (account, sessionId) => {
@@ -353,6 +370,7 @@ const api = createApiHandler({
   version: config.version,
   inDocker: config.inDocker,
   terminal: config.terminal,
+  view: config.view,
   terminals,
   sessions: history,
   timeline: createTimelineHandler({ dir: timelineDir, recording: !!timeline }),
@@ -493,7 +511,11 @@ server.listen(config.port, config.host, () => {
   }
   if (office.isDemo()) log.info(tr('   Modo demonstração ligado (agentes simulados misturados aos reais).'));
   if (config.terminal) log.info(tr('   Terminal: ligado (acesso só local).'));
+  else if (config.view) log.info(tr('   Terminal: somente leitura pela tailnet (HABBLAUD_VIEW_REMOTE).'));
   else log.info(tr('   Terminal: desligado ({0}).', [terminalOffReason(process.env, config.host, config.inDocker)]));
+  if (config.viewForcedOff.length) log.warn(tr('   Modo de visualização: o ambiente pedia {0}, desligado à força (a visualização pela tailnet é só leitura e sem rede para fora).', [config.viewForcedOff.join(', ')]));
+  const viewWhy = viewOffReason(process.env, config.host);
+  if (viewWhy) log.warn(tr('   Visualização pela tailnet desligada: {0}.', [viewWhy]));
   log.info(ptys ? tr('   Terminal interativo: ligado ({0}).', [claudeBin]) : tr('   Terminal interativo: {0}.', [ptyOff ?? tr('desligado')]));
   log.info(
     !spawn
@@ -509,7 +531,7 @@ server.listen(config.port, config.host, () => {
   log.info(
     config.messages
       ? tr('   Mensagens pelo escritório: ligadas (precisa do plugin habblaud-mensagens: npm run mod:install).')
-      : tr('   Mensagens pelo escritório: desligadas ({0}).', [messagesOffReason(process.env, config.host, config.inDocker)]),
+      : tr('   Mensagens pelo escritório: desligadas ({0}).', [messagesOffReason(process.env, config.host, config.inDocker) ?? tr('modo de visualização: só leitura')]),
   );
   if (config.messages) {
     log.info(

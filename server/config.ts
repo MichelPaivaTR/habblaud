@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { discoverClaudeDirs } from './accounts/detect';
 import { parseAllowedHosts } from './http/guard';
@@ -41,8 +41,19 @@ export interface ServerConfig {
    * trava do terminal e HABBLAUD_MENSAGENS sem desligar (ver messagesOffReason).
    */
   messages: boolean;
+  /**
+   * Modo de visualização pela tailnet (HABBLAUD_VIEW_REMOTE=1 com HABBLAUD_HOST num IP da tailnet): libera só a leitura
+   * do terminal, do histórico de sessões e das mensagens (o filtro "Só prompts"); tudo que escreve segue em 403.
+   */
+  view: boolean;
+  /** Recursos que o ambiente pedia ligados e o modo de visualização forçou desligados (vai para o log ao iniciar). */
+  viewForcedOff: string[];
   /** Grava a linha do tempo do escritório para o timelapse (<dataDir>/timeline); HABBLAUD_TIMELINE=0 desliga. */
   timeline: boolean;
+  /** Raízes dos repositórios (HABBLAUD_REPO_ROOTS, separadas por vírgula): com elas, a sala é o repositório. Vazia = sala pela pasta. */
+  repoRoots: string[];
+  /** Arquivo JSON id → nome dos agentes do OpenBot (HABBLAUD_AGENT_NAMES_FILE); ausente = nomes sorteados. */
+  agentNamesFile?: string;
   /** Raiz do projeto (onde fica o package.json); serve dist/client a partir daqui. */
   rootDir: string;
   version: string;
@@ -222,6 +233,42 @@ export function worldSocketUrl(base: string): string {
   return `${base.replace(/^http/, 'ws').replace(/\/+$/, '')}/v1/socket`;
 }
 
+/** IP da tailnet do Tailscale: 100.64.0.0/10 (IPv4) ou fd7a:115c:a1e0::/48 (IPv6). Nome nunca vale. */
+export function isTailnetBind(value: string | undefined): boolean {
+  let v = value?.trim().toLowerCase() ?? '';
+  if (v.startsWith('[') && v.endsWith(']')) v = v.slice(1, -1);
+  const family = isIP(v);
+  if (family === 4) {
+    const [a, b] = v.split('.').map(Number);
+    return a === 100 && (b & 0xc0) === 64;
+  }
+  if (family === 6) return v.startsWith('fd7a:115c:a1e0:');
+  return false;
+}
+
+/**
+ * Por que o modo de visualização ficou desligado mesmo com HABBLAUD_VIEW_REMOTE ligado (undefined = sem a flag, ou
+ * ligado de verdade). Fail-closed: o bind precisa ser um IP da tailnet.
+ */
+export function viewOffReason(env: NodeJS.ProcessEnv, host: string): string | undefined {
+  const flag = env.HABBLAUD_VIEW_REMOTE?.trim();
+  if (!flag || !isTruthy(flag)) return undefined;
+  return isTailnetBind(host) ? undefined : tr('HABBLAUD_VIEW_REMOTE pede um IP da tailnet em HABBLAUD_HOST (estava {0})', [host]);
+}
+
+/**
+ * HABBLAUD_REPO_ROOTS: lista separada por vírgula; espaços e itens vazios saem, cada raiz é normalizada (`//`, `/./`, `..`
+ * e barra final) e raiz relativa ou "/" é descartada. A sala comum e a das cwd usam a mesma forma (repoRoomOf também normaliza).
+ */
+export function parseRepoRoots(raw: string | undefined): string[] {
+  return (raw ?? '')
+    .split(',')
+    .map((r) => r.trim())
+    .filter((r) => r.startsWith('/'))
+    .map((r) => posix.normalize(r).replace(/\/+$/, ''))
+    .filter((r) => r !== '');
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env, argv: string[] = process.argv): ServerConfig {
   const home = env.HOME || homedir();
   const inDocker = detectDocker(env);
@@ -230,6 +277,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, argv: string[] 
   const host = env.HABBLAUD_HOST?.trim() || '127.0.0.1';
   const pkg = readPackage(rootDir);
   const remote = parseRemoteConfig(env, inDocker);
+  const view = !viewOffReason(env, host) && isTruthy(env.HABBLAUD_VIEW_REMOTE);
+  const wanted = {
+    terminal: terminalOffReason(env, host, inDocker) === undefined,
+    messages: messagesOffReason(env, host, inDocker) === undefined,
+    world: parseWorldConfig(env, argv),
+    updateCheck: !env.HABBLAUD_UPDATE_CHECK?.trim() || isTruthy(env.HABBLAUD_UPDATE_CHECK),
+    codex: !env.HABBLAUD_CODEX?.trim() || isTruthy(env.HABBLAUD_CODEX),
+  };
+  // Modo de visualização é só leitura e sem rede para fora: o que o ambiente pedir de diferente (ex.: HABBLAUD_IN_DOCKER=1 com
+  // HABBLAUD_BIND=127.0.0.1 libera o terminal numa porta exposta) é ignorado, e o log diz o que foi forçado.
+  const viewForcedOff = view
+    ? ([
+        wanted.terminal && 'terminal',
+        wanted.messages && 'mensagens',
+        wanted.world.enabled && 'World',
+        wanted.updateCheck && 'verificação de atualização',
+        wanted.codex && 'Codex',
+      ].filter(Boolean) as string[])
+    : [];
   return {
     port: Number.isFinite(port) && port > 0 && port < 65536 ? port : 4747,
     host,
@@ -241,16 +307,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, argv: string[] 
     dataDir: resolve(env.HABBLAUD_DATA_DIR?.trim() || (inDocker ? '/data' : join(home, '.habblaud'))),
     usageDir: resolve(env.HABBLAUD_USAGE_DIR?.trim() || join(home, '.habblaud', 'usage')),
     allowedHosts: parseAllowedHosts(env.HABBLAUD_ALLOWED_HOSTS),
-    terminal: terminalOffReason(env, host, inDocker) === undefined,
-    messages: messagesOffReason(env, host, inDocker) === undefined,
+    terminal: wanted.terminal && !view,
+    messages: wanted.messages && !view,
+    view,
+    viewForcedOff,
     timeline: !env.HABBLAUD_TIMELINE?.trim() || isTruthy(env.HABBLAUD_TIMELINE),
+    repoRoots: parseRepoRoots(env.HABBLAUD_REPO_ROOTS),
+    agentNamesFile: env.HABBLAUD_AGENT_NAMES_FILE?.trim() || undefined,
     rootDir,
     version: pkg.version,
     repo: pkg.repo,
-    updateCheck: !env.HABBLAUD_UPDATE_CHECK?.trim() || isTruthy(env.HABBLAUD_UPDATE_CHECK),
-    codex: !env.HABBLAUD_CODEX?.trim() || isTruthy(env.HABBLAUD_CODEX),
+    updateCheck: wanted.updateCheck && !view,
+    codex: wanted.codex && !view,
     remote: remote.config,
     remoteWarning: remote.warning,
-    world: parseWorldConfig(env, argv),
+    world: view ? { ...wanted.world, enabled: false } : wanted.world,
   };
 }

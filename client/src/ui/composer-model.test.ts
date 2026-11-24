@@ -11,6 +11,7 @@ import {
   isSettled,
   messageText,
   PLUGIN_HINT,
+  READ_ONLY_HINT,
   pollDelay,
   sendStatusText,
   timeoutError,
@@ -64,7 +65,8 @@ describe('caixa de mensagem (peças puras)', () => {
     expect(off(undefined)).toBe('Sessão encerrada');
     expect(off(agent(), { enabled: false })).toMatch(/terminal do Claude Code/);
     expect(off(agent({ canMessage: undefined }), { enabled: false })).toMatch(/terminal do Claude Code/);
-    expect(off(agent(), { local: false })).toMatch(/localhost/);
+    expect(composerMode(agent(), { ...ON, local: false })).toEqual({ kind: 'hint', text: READ_ONLY_HINT });
+    expect(READ_ONLY_HINT).toBe('Somente leitura');
     expect(off(agent(), { replaying: true })).toMatch(/timelapse/);
   });
 

@@ -2,6 +2,7 @@
 // Eventos nomeados: snapshot | feed | notice (o `data` é o JSON do protocolo em shared/types.ts).
 // Snapshots saem com throttle (~200 ms); feed e avisos vão em lote logo depois do snapshot.
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { maskDeep } from '../../shared/activity';
 import type { OfficeSnapshot } from '../../shared/types';
 import type { Office } from '../model/office';
 import { isLoopbackHost } from './guard';
@@ -20,15 +21,18 @@ export class Hub {
   private snapshotCbs = new Set<(snap: OfficeSnapshot) => void>();
   private readonly throttleMs: number;
   private readonly pingMs: number;
+  /** Modo de visualização: os quadros do stream passam por maskDeep (como as respostas JSON). */
+  private readonly mask: boolean;
   /** Quem pode responder pelo escritório; padrão: Host local. A porta remota (http/remote.ts) troca a regra. */
   private readonly canAnswer: (req: IncomingMessage) => boolean;
 
   constructor(
     private readonly office: Office,
-    opts: { throttleMs?: number; pingMs?: number; canAnswer?: (req: IncomingMessage) => boolean } = {},
+    opts: { throttleMs?: number; pingMs?: number; canAnswer?: (req: IncomingMessage) => boolean; mask?: boolean } = {},
   ) {
     this.throttleMs = opts.throttleMs ?? 200;
     this.pingMs = opts.pingMs ?? 15_000;
+    this.mask = opts.mask ?? false;
     this.canAnswer = opts.canAnswer ?? ((req) => isLoopbackHost(req.headers.host));
   }
 
@@ -78,8 +82,8 @@ export class Hub {
     });
     const snapshot = this.current();
     res.write('retry: 2000\n\n');
-    res.write(frame('snapshot', snapshot));
-    res.write(frame('feed', this.office.recentFeed(50)));
+    res.write(this.frame('snapshot', snapshot));
+    res.write(this.frame('feed', this.office.recentFeed(50)));
     this.clients.add(res);
     if (this.canAnswer(req)) this.local.add(res);
     const drop = () => this.clients.delete(res);
@@ -95,7 +99,7 @@ export class Hub {
     this.lastFlush = Date.now();
     const r = this.office.commit();
     if (r.changed) {
-      this.writeAll(frame('snapshot', r.snapshot));
+      this.writeAll(this.frame('snapshot', r.snapshot));
       for (const cb of this.snapshotCbs) {
         try {
           cb(r.snapshot);
@@ -104,8 +108,8 @@ export class Hub {
         }
       }
     }
-    if (r.feed.length) this.writeAll(frame('feed', r.feed));
-    for (const n of r.notices) this.writeAll(frame('notice', n));
+    if (r.feed.length) this.writeAll(this.frame('feed', r.feed));
+    for (const n of r.notices) this.writeAll(this.frame('notice', n));
     return r.snapshot;
   }
 
@@ -122,6 +126,10 @@ export class Hub {
       this.flush();
     }, wait);
     this.timer.unref?.();
+  }
+
+  private frame(event: string, data: unknown): string {
+    return frame(event, this.mask ? maskDeep(data) : data);
   }
 
   private writeAll(chunk: string): void {

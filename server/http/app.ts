@@ -1,5 +1,6 @@
 // Rotas da API (/api/*). Respostas JSON; rotas desconhecidas -> 404 JSON.
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { maskDeep } from '../../shared/activity';
 import { NAME_MAX, parseAppearanceParts, parseCharacterName, parseSeed } from '../../shared/appearance';
 import type { AccessInfo, AgentInfo, ModSummary, OfficeSnapshot, SourceInfo, UpdateStatus } from '../../shared/types';
 import type { AccountsService } from '../accounts/service';
@@ -32,6 +33,11 @@ export interface ApiDeps {
   inDocker: boolean;
   /** Terminal ligado (ServerConfig.terminal: só com bind local). */
   terminal?: boolean;
+  /**
+   * Modo de visualização pela tailnet (ServerConfig.view): libera só a leitura do terminal, do histórico e das
+   * mensagens. Escrita, permissões, PTY, entregas e edição seguem em 403.
+   */
+  view?: boolean;
   /** Streams do terminal; sem eles o recurso fica desligado mesmo com `terminal`. */
   terminals?: TerminalStreams;
   /**
@@ -151,8 +157,15 @@ export class HttpError extends Error {
   }
 }
 
+/** Respostas do modo de visualização (deps.view): tudo que sai pela rede passa por maskDeep (ver sendJson e o timeline). */
+const viewResponses = new WeakSet<ServerResponse>();
+
+export function isViewResponse(res: ServerResponse): boolean {
+  return viewResponses.has(res);
+}
+
 export function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  const data = JSON.stringify(body);
+  const data = JSON.stringify(viewResponses.has(res) ? maskDeep(body) : body);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(data),
@@ -262,7 +275,7 @@ export function modSummary(
 /** Devolve um handler que trata /api/* e responde false para o resto. */
 export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: ServerResponse, url: URL) => boolean {
   const { office, hub, accounts } = deps;
-  const terminals = deps.terminal ? deps.terminals : undefined;
+  const terminals = deps.terminal || deps.view ? deps.terminals : undefined;
 
   const isRemote = (req: IncomingMessage): boolean => !!deps.remote?.is(req);
   /**
@@ -271,6 +284,8 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
    */
   const trusted = (req: IncomingMessage, feature?: RemoteFeature): boolean =>
     isRemote(req) ? !!feature && !!deps.remote?.allows(feature) : isLoopbackHost(req.headers.host);
+  /** Leitura do terminal e do histórico: a trava local, ou o modo de visualização pela tailnet (só leitura). */
+  const viewTrusted = (req: IncomingMessage): boolean => (isRemote(req) ? trusted(req, 'terminal') : isLoopbackHost(req.headers.host) || !!deps.view);
   const denied = (req: IncomingMessage, localMessage: string): string =>
     isRemote(req) ? tr('não liberado no acesso remoto (veja HABBLAUD_REMOTE_ALLOW)') : localMessage;
 
@@ -332,10 +347,18 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
     if (path !== '/api' && !path.startsWith('/api/')) return false;
     const method = req.method ?? 'GET';
     const isRead = method === 'GET' || method === 'HEAD';
+    // Modo de visualização: rede de segurança sobre a máscara da fonte (campos novos e dados já gravados).
+    if (deps.view) viewResponses.add(res);
 
     if (isRemote(req) && isLocalOnlyPath(path)) {
       req.resume();
       sendJson(res, 403, { error: tr('rota só do próprio computador (hooks, plugins e o auxiliar do host)') });
+      return true;
+    }
+    if (deps.view && !isRead) {
+      // Modo de visualização pela tailnet: só leitura. Qualquer escrita é 403 antes de chegar a uma rota.
+      req.resume();
+      sendJson(res, 403, { error: tr('somente leitura pela tailnet (HABBLAUD_VIEW_REMOTE)') });
       return true;
     }
     if (path === '/api/world' || path.startsWith('/api/world/')) {
@@ -396,7 +419,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
           local: !remote && isLoopbackHost(req.headers.host),
           permissions: !!deps.permissions && trusted(req, 'permissions'),
           messages: !!deps.messages && trusted(req, 'messages'),
-          terminal: !!terminals && trusted(req, 'terminal'),
+          terminal: !!terminals && viewTrusted(req),
           spawn: !!deps.spawn && trusted(req, 'spawn'),
           world: !!deps.world && !!deps.terminal && !remote && isLoopbackHost(req.headers.host),
         };
@@ -418,7 +441,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       if (method !== 'GET') methodNotAllowed(res, 'GET');
       else if (!terminals) {
         sendJson(res, 403, { error: tr('terminal desligado: ele só funciona com o Habblaud acessível apenas pelo próprio computador') });
-      } else if (!trusted(req, 'terminal')) {
+      } else if (!viewTrusted(req)) {
         sendJson(res, 403, { error: denied(req, tr('o terminal só abre pelo próprio computador (http://localhost ou http://127.0.0.1)')) });
       } else {
         let id: string;
@@ -434,9 +457,9 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
     }
     if (path.startsWith('/api/sessions/')) {
       handleSessionsRoute(req, res, path, {
-        history: deps.terminal ? deps.sessions : undefined,
+        history: deps.terminal || deps.view ? deps.sessions : undefined,
         terminals,
-        trusted: isRemote(req) ? trusted(req, 'terminal') : undefined,
+        trusted: isRemote(req) ? trusted(req, 'terminal') : deps.view ? true : undefined,
       });
       return true;
     }

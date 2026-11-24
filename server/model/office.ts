@@ -30,6 +30,7 @@ import { describeGitHubEvent, githubEventKey, RoomEffects, type GitHubEvent } fr
 import { hash32 } from '../../shared/hash';
 import { applyPermission } from '../permissions/registry';
 import type { NameStore, StoredCharacter } from './names';
+import { repoRoomOf } from './repo-room';
 import { normalizeCwd, roomDisplayNames, SlotAllocator } from './rooms';
 import { tr } from '../../shared/i18n';
 import type { WorldMeta } from '../../shared/world/api';
@@ -37,6 +38,8 @@ import type { WorldMeta } from '../../shared/world/api';
 export const OFFLINE_GRACE_MS = 20_000;
 export const DONE_GRACE_MS = 25_000;
 export const SLOT_COOLDOWN_MS = 30_000;
+/** Sem evidência de repositório por este tempo, o agente volta para a sala comum. */
+export const REPO_TTL_MS = 30 * 60_000;
 export const NOTICE_DEDUPE_MS = 10_000;
 /** Aviso "está esperando o shell": no máximo um a cada 10 min por agente. */
 export const SHELL_NOTICE_DEDUPE_MS = 600_000;
@@ -80,6 +83,10 @@ export interface OfficeDeps {
   ptys?: () => { status: PtyStatus; list: PtyInfo[] };
   /** Habblaud World (WorldService.meta; ver OfficeSnapshot.meta.world). */
   world?: () => WorldMeta;
+  /** Raízes dos repositórios (HABBLAUD_REPO_ROOTS): com elas a sala é o repositório; a primeira raiz é a sala comum. */
+  repoRoots?: string[];
+  /** Modo de visualização pela tailnet (ServerConfig.view): e-mail e organização das contas não saem no snapshot. */
+  view?: boolean;
   now?: () => number;
 }
 
@@ -107,6 +114,8 @@ export interface MainInput {
   startedAt: number;
   status: AgentStatus;
   waitingFor?: string;
+  /** Agente do OpenBot (pasta agent-<uuid>): nome dele no OpenBot, sem sorteio nem personagem salvo. */
+  openbot?: { agentId: string; name: string };
 }
 
 export interface SubInput {
@@ -123,6 +132,14 @@ interface AgentRecord {
   info: AgentInfo;
   history: Activity[];
   removeAt?: number;
+  /** Última evidência de repositório do principal (sala = repositório) e o instante dela. */
+  repo?: { room: string; at: number };
+  /** Aviso "chegou" deste agente (para o B7: se ainda não saiu, a mudança de sala o reescreve em vez de duplicar). */
+  arrival?: { notice: Notice; account: string };
+  /** Nome vindo do OpenBot: não passa pelo NameStore (nada de names.json). */
+  fixedName?: boolean;
+  /** Nome-base do OpenBot (sem o sufixo de duplicata); ver renameOpenbot. */
+  openbotName?: string;
   /** Início do turno atual (para "Concluiu em X"). */
   turnStart?: number;
   /** Atividade "Concluiu" sintetizada pela mudança de status (substituída pela do transcript, se vier). */
@@ -167,6 +184,12 @@ function isOpenQuestion(a: Activity | undefined): boolean {
 
 function zeroStats(): AgentStats {
   return { toolCalls: 0, tokensIn: 0, tokensOut: 0, subagents: 0 };
+}
+
+/** Conta sem e-mail e organização (o que a tailnet não precisa ver); plano e uso ficam. */
+function hideAccountContact(a: AccountInfo): AccountInfo {
+  const { email: _email, organization: _organization, ...rest } = a;
+  return rest;
 }
 
 function cloneAgent(a: AgentInfo): AgentInfo {
@@ -217,9 +240,11 @@ export class Office {
   private effects = new RoomEffects();
   private seq = 0;
   private readonly now: () => number;
+  private readonly repoRoots: string[];
 
   constructor(private readonly deps: OfficeDeps) {
     this.now = deps.now ?? Date.now;
+    this.repoRoots = deps.repoRoots ?? [];
   }
 
   /** Avisado (síncrono) sempre que algo muda; o hub decide quando fazer commit(). */
@@ -322,12 +347,12 @@ export class Office {
       this.setStatus(p.id, p.status, p.waitingFor);
       return;
     }
-    const roomId = normalizeCwd(p.cwd);
+    const roomId = this.startRoom(p.cwd);
     this.ensureRoom(roomId, now);
-    const chosen = this.roomCharacter(roomId, p.id, p.sessionId);
+    const chosen = p.openbot ? undefined : this.roomCharacter(roomId, p.id, p.sessionId);
     // A mesma sessão retomada noutro processo (ex.: "Assumir aqui") mantém o nome, mesmo com o processo antigo
     // ainda saindo do escritório.
-    const person = chosen ?? this.deps.names.assign(p.sessionId, this.takenNames(undefined, p.sessionId));
+    const person = p.openbot ? this.openbotPerson(p.openbot) : (chosen ?? this.deps.names.assign(p.sessionId, this.takenNames(undefined, p.sessionId)));
     const info: AgentInfo = {
       id: p.id,
       kind: 'main',
@@ -344,7 +369,7 @@ export class Office {
       lastEventAt: p.startedAt,
       statusSince: now,
       stats: zeroStats(),
-      seed: chosen?.seed ?? hash32(p.id),
+      seed: p.openbot ? hash32(p.openbot.agentId) : (chosen?.seed ?? hash32(p.id)),
     };
     if (p.provider && p.provider !== 'claude') info.provider = p.provider;
     if (chosen) {
@@ -353,10 +378,17 @@ export class Office {
     }
     if (p.status === 'waiting') info.waitingFor = p.waitingFor ?? tr('responder no terminal');
     const rec: AgentRecord = { info, history: [] };
+    if (p.openbot) {
+      rec.fixedName = true;
+      rec.openbotName = p.openbot.name;
+    }
     if (p.status === 'working') rec.turnStart = now;
     this.agents.set(p.id, rec);
     const acc = this.deps.accountName(p.account);
+    const before = this.pendingNotices.length;
     this.notice('arrive', p.id, 'info', tr('👋 {0} chegou em {1}{2}', [info.name, this.roomName(roomId), acc ? ` (${acc})` : '']), roomId);
+    const arrived = this.pendingNotices.length > before ? this.pendingNotices[this.pendingNotices.length - 1] : undefined;
+    if (arrived) rec.arrival = { notice: arrived, account: acc ? ` (${acc})` : '' };
     this.markDirty();
   }
 
@@ -370,15 +402,32 @@ export class Office {
     if (info.custom) {
       const owner = this.deps.names.character(info.roomId)?.owner;
       if (owner === undefined || owner === info.sessionId) this.deps.names.claimCharacter(info.roomId, sessionId);
-    } else {
+    } else if (!rec.fixedName) {
       this.deps.names.remember(sessionId, { name: info.name, look: info.look });
     }
     info.sessionId = sessionId;
     info.tasks = [];
     info.stats = zeroStats();
     delete info.title;
+    if (this.repoRoots.length) {
+      delete rec.repo;
+      if (info.roomId !== this.repoRoots[0]) this.moveTree(id, this.repoRoots[0]);
+    }
     this.addActivity(id, { id: `${id}#clear:${++this.seq}`, at: this.now(), ...SPECIAL.cleared() }, true);
     this.markDirty();
+  }
+
+  /**
+   * Evidência de repositório (ferramenta do principal ou de um subagente dele): o principal e a família vão para a
+   * sala desse repositório. Vale a última evidência; uma mais velha que o TTL é ignorada.
+   */
+  setRepo(id: string, room: string, at: number): void {
+    if (!this.repoRoots.length) return;
+    const main = this.mainOf(id);
+    if (!main || this.now() - at > REPO_TTL_MS) return;
+    if (main.repo && at < main.repo.at) return;
+    main.repo = { room, at };
+    if (main.info.roomId !== room) this.moveTree(main.info.id, room);
   }
 
   setStatus(id: string, status: AgentStatus, waitingFor?: string): void {
@@ -919,6 +968,7 @@ export class Office {
       this.pendingNotices.push(...r.notices);
       if (r.changed || r.feed.length || r.notices.length) this.markDirty();
     }
+    if (this.repoRoots.length) this.sweepRepos(now);
     let removed = false;
     for (const [id, rec] of this.agents) {
       if (rec.removeAt !== undefined && now >= rec.removeAt) {
@@ -991,7 +1041,7 @@ export class Office {
       serverTime: now,
       rooms,
       agents: [...real, ...demoAgents].map(trim),
-      accounts: [...this.deps.accounts(sessions), ...(this.demoSnap?.accounts ?? [])],
+      accounts: [...this.deps.accounts(sessions), ...(this.demoSnap?.accounts ?? [])].map((a) => (this.deps.view ? hideAccountContact(a) : a)),
       ...(ptys ? { ptys: ptys.list } : {}),
       meta: {
         demo: this.isDemo(),
@@ -1043,6 +1093,80 @@ export class Office {
     this.rooms.set(roomId, { path: roomId, createdAt: now });
     this.recomputeRoomNames();
     this.notice('room', roomId, 'info', tr('🏗️ Nova sala: {0}', [this.roomName(roomId)]), roomId);
+  }
+
+  /** Sala de quem chega: o repositório da pasta da sessão, ou a sala comum. */
+  private startRoom(cwd: string): string {
+    if (!this.repoRoots.length) return normalizeCwd(cwd);
+    return repoRoomOf(cwd, this.repoRoots) ?? this.repoRoots[0];
+  }
+
+  /** Principal de um agente (um subagente sobe até o pai). */
+  private mainOf(id: string): AgentRecord | undefined {
+    let rec = this.agents.get(id);
+    for (let i = 0; rec?.info.kind === 'sub' && i < 16; i++) rec = rec.info.parentId ? this.agents.get(rec.info.parentId) : undefined;
+    return rec?.info.kind === 'main' ? rec : undefined;
+  }
+
+  /** Nome do OpenBot do agente; um segundo agente com o mesmo nome (outra sessão dele) vira "nome 2", "nome 3"... */
+  private openbotPerson(o: { agentId: string; name: string }): { name: string; look: 'f' | 'm' } {
+    return { name: this.openbotName(o.name), look: hash32(o.agentId) % 2 ? 'm' : 'f' };
+  }
+
+  private openbotName(base: string, exceptId?: string): string {
+    const used = new Set([...this.agents].filter(([id]) => id !== exceptId).map(([, r]) => r.info.name));
+    let name = base;
+    for (let n = 2; used.has(name); n++) name = `${base} ${n}`;
+    return name;
+  }
+
+  /**
+   * O nome do OpenBot mudou (arquivo de nomes criado ou atualizado, agente renomeado): troca o nome do agente, mantendo o
+   * sufixo de duplicata. Sem mudança no nome-base, não faz nada.
+   */
+  renameOpenbot(id: string, base: string): void {
+    const rec = this.agents.get(id);
+    if (!rec?.fixedName || rec.openbotName === base) return;
+    rec.openbotName = base;
+    rec.info.name = this.openbotName(base, id);
+    this.markDirty();
+  }
+
+  /** Leva o principal e os subagentes dele para a sala. */
+  private moveTree(mainId: string, roomId: string): void {
+    const rec = this.agents.get(mainId);
+    if (!rec) return;
+    const from = rec.info.roomId;
+    this.ensureRoom(roomId, this.now());
+    rec.info.roomId = roomId;
+    for (const sub of this.descendants(mainId)) sub.info.roomId = roomId;
+    const arrival = rec.arrival;
+    delete rec.arrival;
+    if (arrival && this.pendingNotices.includes(arrival.notice)) {
+      // Sessão nova que já nasce com evidência de repositório (mesmo ciclo): um aviso só, na sala certa (B7).
+      arrival.notice.text = tr('👋 {0} chegou em {1}{2}', [rec.info.name, this.roomName(roomId), arrival.account]);
+      arrival.notice.roomId = roomId;
+    } else {
+      this.notice('room', mainId, 'info', tr('🚚 {0} foi para {1}', [rec.info.name, this.roomName(roomId)]), roomId);
+    }
+    this.dropRoomIfEmpty(from);
+    this.markDirty();
+  }
+
+  private dropRoomIfEmpty(roomId: string): void {
+    if (!this.rooms.has(roomId)) return;
+    for (const r of this.agents.values()) if (r.info.roomId === roomId) return;
+    this.rooms.delete(roomId);
+    this.recomputeRoomNames();
+  }
+
+  /** Principal sem evidência de repositório há mais que REPO_TTL_MS volta para a sala comum. */
+  private sweepRepos(now: number): void {
+    for (const rec of this.agents.values()) {
+      if (rec.info.kind !== 'main' || !rec.repo || now - rec.repo.at <= REPO_TTL_MS) continue;
+      delete rec.repo;
+      if (rec.info.roomId !== this.repoRoots[0]) this.moveTree(rec.info.id, this.repoRoots[0]);
+    }
   }
 
   private recomputeRoomNames(): void {

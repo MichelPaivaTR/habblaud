@@ -12,7 +12,8 @@ import { SPECIAL } from '../../shared/activity';
 import type { Activity, AgentStatus, SourceInfo } from '../../shared/types';
 import type { AccountsService } from '../accounts/service';
 import { errMsg, log } from '../log';
-import type { Office, TranscriptSummary } from '../model/office';
+import { agentIdFromCwd, AgentNames, fallbackAgentName } from '../model/agent-names';
+import type { MainInput, Office, TranscriptSummary } from '../model/office';
 import { compareVersions, registryStatus, RegistryReader, SHELL_STATUS_VERSION, type RegistryEntry } from './registry';
 import { SHELL_FALLBACK_MAX_AGE_MS, ShellTracker, toShellJob, type ShellFinish } from './shells';
 import type { AgentSource } from './source';
@@ -56,6 +57,12 @@ export interface WatcherOptions {
   isAlive?: (pid: number) => boolean;
   /** Desliga o fs.watch (testes). */
   watch?: boolean;
+  /** Raízes dos repositórios (HABBLAUD_REPO_ROOTS): as chamadas de ferramenta viram sinais repoHint. */
+  repoRoots?: string[];
+  /** H11: dono/repo -> sala pelo origin dos clones (GithubRepos.lookup). */
+  githubRepos?: (ownerRepo: string) => string | undefined;
+  /** Nomes dos agentes do OpenBot (HABBLAUD_AGENT_NAMES_FILE); ausente = nomes sorteados. */
+  agentNames?: AgentNames;
 }
 
 /** cwd -> nome da pasta em projects/ (todo caractere não alfanumérico vira "-"). */
@@ -301,6 +308,13 @@ export class ClaudeWatcher implements AgentSource {
     }
   }
 
+  /** Agente do OpenBot da sessão, com o nome do arquivo (ou o padrão); undefined sem o arquivo ou fora da pasta de agentes. */
+  private openbotOf(cwd: string): MainInput['openbot'] {
+    const agentId = agentIdFromCwd(cwd);
+    if (!agentId || !this.opts.agentNames) return undefined;
+    return { agentId, name: this.opts.agentNames.nameOf(agentId) ?? fallbackAgentName(agentId) };
+  }
+
   private syncSession(key: string, accountId: string, dir: string, entry: RegistryEntry, boot: boolean): void {
     const office = this.opts.office;
     let t = this.sessions.get(key);
@@ -317,6 +331,7 @@ export class ClaudeWatcher implements AgentSource {
         startedAt: entry.startedAt ?? this.now(),
         status: st.status ?? 'idle',
         waitingFor: st.waitingFor,
+        openbot: this.openbotOf(entry.cwd),
       });
     } else if (t.sessionId !== entry.sessionId) {
       // /clear ou /resume no mesmo processo: mesmo personagem, transcript novo.
@@ -327,6 +342,9 @@ export class ClaudeWatcher implements AgentSource {
       office.switchSession(key, entry.sessionId);
       t = fresh;
     }
+    // O nome do OpenBot é reavaliado a cada ciclo: o arquivo pode chegar ou mudar depois da sessão abrir.
+    const openbot = this.openbotOf(entry.cwd);
+    if (openbot) office.renameOpenbot(key, openbot.name);
     t.entry = entry;
     this.pumpMain(t);
     this.scanSubagents(t, boot);
@@ -507,7 +525,7 @@ export class ClaudeWatcher implements AgentSource {
    * (no lugar certo do feed) em vez de um "Fazendo uma pergunta" atrasado.
    */
   private applyMainLines(t: SessionTracker, lines: string[], live: boolean): void {
-    const results = lines.map((line) => parseWatchedLine(t.state, line, { idPrefix: t.key, now: this.now() }));
+    const results = lines.map((line) => parseWatchedLine(t.state, line, { idPrefix: t.key, now: this.now(), repoRoots: this.opts.repoRoots, githubRepos: this.opts.githubRepos }));
     for (const r of results) {
       for (const a of r.activities) {
         if (a.activity.kind === 'ask' && a.toolUseId && !t.state.pendingTools.has(a.toolUseId)) {
@@ -607,6 +625,9 @@ export class ClaudeWatcher implements AgentSource {
       case 'github':
         // Só o que chega ao vivo anima a sala; a carga inicial (boot, sessão retomada) vai para o histórico.
         this.opts.office.githubEvent(owner, sig.event, { key: sig.toolUseId, at, live });
+        return;
+      case 'repoHint':
+        this.opts.office.setRepo(owner, sig.repo, sig.at);
         return;
       default:
         return;
@@ -743,7 +764,7 @@ export class ClaudeWatcher implements AgentSource {
     const results: LineResult[] = [];
     for (let i = 0; i < 64; i++) {
       const r = tail.read();
-      for (const line of r.lines) results.push(parseWatchedLine(state, line, { idPrefix: id, now }));
+      for (const line of r.lines) results.push(parseWatchedLine(state, line, { idPrefix: id, now, repoRoots: this.opts.repoRoots, githubRepos: this.opts.githubRepos }));
       if (!r.more) break;
     }
     const finished =
@@ -812,7 +833,7 @@ export class ClaudeWatcher implements AgentSource {
           break;
         }
         for (const line of r.lines) {
-          const res = parseWatchedLine(sub.state, line, { idPrefix: sub.id, now });
+          const res = parseWatchedLine(sub.state, line, { idPrefix: sub.id, now, repoRoots: this.opts.repoRoots, githubRepos: this.opts.githubRepos });
           fresh += res.activities.length;
           this.applyResult(t, sub.id, res, true);
         }
